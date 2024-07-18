@@ -1,12 +1,26 @@
-####---- Load packages and data ----####
+---
+title: "msqrob2Lm fitting problem"
+author: "Léopold Guyot"
+date: "`r Sys.Date()`"
+output: html_document
+---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages
+```{r}
 library("scp")
 library("msqrob2")
 library("BiocParallel")
 library("tidyverse")
 library("scp")
 
-####---- Utility functions ----####
+```
+
+# Load data
+```{r}
 
 .createMockBalanced <- function(k, runs) {
     out <- split(runs, runs)
@@ -19,24 +33,35 @@ library("scp")
     as.factor(out)
 }
 
-####---- Load data ----####
-
 sce <- readRDS("data/leduc_mock.rds")
 set.seed(1234)
 sce$Mock <- .createMockBalanced(2, sce$Set)
 
 sub_assay <- sce["EATTEFSVDAR_2",] # non fitted with msqrob
+```
 
-sub_assay <- msqrob(
-    sub_assay,
-    formula = ~ -1 + Channel + Set + Mock,
-    ridge = FALSE, robust = FALSE,
-    overwrite = TRUE)
-debug(msqrobLm)
+EATTEFSVDAR_2 was chosen because this peptide was successfully fitted with scplainer while did not with msqrob2Lm.
+
+# Fit with msqrob2Lm
+
+```{r}
 msqrobLm(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay))
 
+```
 
+It returns an fit.error object which indicate that the fit failed.
 
+# Fit with scplainer
+```{r}
+scpModelWorkflow(sub_assay, formula = ~ 1 + Channel + Set + Mock)
+
+```
+
+It returns a successful fit.
+
+# Code diging
+
+```{r}
 X_subsetting <- function(X, y){
     obs <- is.finite(y)
     X <- X[obs, , drop = FALSE]
@@ -127,8 +152,42 @@ custom_msqlm <- function (y, formula, data, robust = TRUE, maxitRob = 5)
     return(models)
 }
 
-undebug(custom_msqlm)
-custom_msqlm(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay), robust = FALSE)
+msqrob_subset <- X_subsetting(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,])
+X_subsetting_v2(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,])
 
-debug(scp::scpModelWorkflow)
-scp::scpModelWorkflow(sub_assay, formula = ~ 1 + Channel + Set + Mock)
+```
+
+Here is the source code for the function msqrobLm. We can see that the function returns a fit.error because the rank of the model is lower than the number of columns of the model matrix. This model is therefore rank deficient. I tried to use an other technique for the subseting of the model matrix. In the original version, the columns are removed when they are composed only with 0. I tried to remove the columns with a variance of 0, this means that columns with only one unique value are removed (0 or 1). This is done in the function X_subsetting_v2. But we can see that for this peptide there are no differences between the two methods (with 109 columns for both, while the rank of the model is 108).
+
+Now we will have a look at the scplainer solution.
+```{r}
+.adapt_model <- function (y, coldata, formula) 
+{
+    coldata <- coldata[!is.na(y), all.vars(formula), drop = FALSE]
+    if (nrow(coldata) <= 2) {
+        out <- matrix(nrow = nrow(coldata), ncol = 0)
+        attr(out, "levels") <- List()
+        return(out)
+    }
+    coldata <- droplevels(coldata)
+    formula <- scp:::.dropConstantVariables(coldata, formula)
+    coldata <- coldata[, all.vars(formula), drop = FALSE]
+    coldata <- scp:::.centerNumericalVariables(coldata)
+    out <- model.matrix(formula, data = coldata, contrasts.arg = scp:::.modelContrasts(coldata))
+    attr(out, "levels") <- scp:::.modelLevels(coldata)
+    out
+}
+
+scplainer_subset <- .adapt_model(assay(sub_assay)[1,], colData(sub_assay), ~ 1 + Channel + Set + Mock)
+dim(scplainer_subset)
+```
+
+Here we can see the function that is used in scplainer to subset the model matrix. The first step is to remove from the colData the rows that don't have a value for this peptide. All the variables that are not in the formula are removed from the colData. Then the function dropLevels, drop the levels of the factors that are not present anymore in the data. The function dropConstantVariables remove the columns that have only one unique value (ie. that only one group of the variable is present in the subset). Then the model matrix is created with the formula and the modified colData. We can see that in the case of this peptide. The model matrix is composed of 108 columns which match the rank of the model. This is why the fit is successful with scplainer and not with msqrob2Lm.
+
+```{r}
+
+colnames(msqrob_subset) %in% colnames(scplainer_subset)
+colnames(msqrob_subset)
+colnames(scplainer_subset)
+```
+
