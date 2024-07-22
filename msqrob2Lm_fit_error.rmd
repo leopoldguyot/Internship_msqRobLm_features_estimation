@@ -11,12 +11,11 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Load packages
 ```{r}
-library("scp")
 library("msqrob2")
 library("BiocParallel")
 library("tidyverse")
 library("scp")
-
+library("limma")
 ```
 
 # Load data
@@ -153,8 +152,9 @@ custom_msqlm <- function (y, formula, data, robust = TRUE, maxitRob = 5)
 }
 
 msqrob_subset <- X_subsetting(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,])
-X_subsetting_v2(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,])
-
+v2 <- colnames(X_subsetting_v2(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,]))
+v1 <- colnames(X_subsetting(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)), assay(sub_assay)[1,]))
+v1[!v1 %in% v2] # He just remove the intercept
 ```
 
 Here is the source code for the function msqrobLm. We can see that the function returns a fit.error because the rank of the model is lower than the number of columns of the model matrix. This model is therefore rank deficient. I tried to use an other technique for the subseting of the model matrix. In the original version, the columns are removed when they are composed only with 0. I tried to remove the columns with a variance of 0, this means that columns with only one unique value are removed (0 or 1). This is done in the function X_subsetting_v2. But we can see that for this peptide there are no differences between the two methods (with 109 columns for both, while the rank of the model is 108).
@@ -173,7 +173,7 @@ Now we will have a look at the scplainer solution.
     formula <- scp:::.dropConstantVariables(coldata, formula)
     coldata <- coldata[, all.vars(formula), drop = FALSE]
     coldata <- scp:::.centerNumericalVariables(coldata)
-    out <- model.matrix(formula, data = coldata, contrasts.arg = scp:::.modelContrasts(coldata))
+    out <- model.matrix(formula, data = coldata)
     attr(out, "levels") <- scp:::.modelLevels(coldata)
     out
 }
@@ -186,8 +186,61 @@ Here we can see the function that is used in scplainer to subset the model matri
 
 ```{r}
 
-colnames(msqrob_subset) %in% colnames(scplainer_subset)
-colnames(msqrob_subset)
-colnames(scplainer_subset)
+problematic_cols <- msqrob_subset[,!colnames(msqrob_subset) %in% colnames(scplainer_subset)]
+
+colVars(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)))[colnames(problematic_cols)]
+colMeans(model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay)))[colnames(problematic_cols)]
 ```
+
+Here we can see the two problematic variables that are present in the msqrob model matrix but not in the scplainer model matrix. We can also see that in fact, these variables would not be filtered out by the sub-setting of msqrobLm. But how these variables are filtered out in scplainer? 
+
+```{r}
+    formula <- ~ 1 + Channel + Set + Mock
+colnames(model.matrix(formula, data = colData(sub_assay)))
+y <- assay(sub_assay)[1,]
+    coldata <- colData(sub_assay)
+    coldata <- coldata[!is.na(y), all.vars(formula), drop = FALSE]
+    "TMT128C" %in% coldata$Channel # TRUE => reference of scplauner
+    coldata <- droplevels(coldata)
+    formula <- scp:::.dropConstantVariables(coldata, formula) # do not change
+    coldata <- coldata[, all.vars(formula), drop = FALSE] # therefore do not change
+    coldata <- scp:::.centerNumericalVariables(coldata)
+    out <- model.matrix(formula, data = coldata)
+    
+    
+    "eAL00223" %in% coldata$Set # TRUE => reference of scplainer
+    # reference level of msqrob
+    levels(colData(sub_assay)$Channel)[1]
+    levels(as.factor(colData(sub_assay)$Set))[1]
+    
+    "ChannelTMT126" %in% colnames(out)
+    "SeteAL00219" %in% colnames(out)
+```
+
+In fact, the problem is caused by the fact that msqrob first form the model matrix which already select reference parameters to be 0. Then these parameters cannot be test for their variance and therefore cannot be filtered out. If these reference parameter are problematic, this will cause the model to be rank deficient. This is why scplainer first filter out the groups that have no values. This is why the model matrix is composed of 108 columns and not 110 (reference for set and channel). This is why the fit is successful with scplainer and not with msqrob2Lm. But this cannot be directly integrated in msqrob2Lm because the method fix the contrast for all the features, therefore we cannot easily change the reference parameters for each feature. A way we could handle this is by using something similar to limma::contrasts.fit that can modify the results of an model to be able to use the results in the context of another reference parameter.
+
+But the set is not on the reference level ???
+
+# Exploration of limma:
+
+```{r}
+y <- assay(sub_assay)[1,]
+design <- model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay))
+
+limma_fit <- lmFit(y, design) # still use the reference level like msqrob
+# the model is construct but is rank deficient since the reference level are not composed of any values. Here there are no filtering outside the function, to be investigated
+
+L <- makeContrasts(Mock2, levels = design)
+rownames(L)[1] <- "(Intercept)"
+contrast_fit <- contrasts.fit(limma_fit, L)
+
+# Try to fit the contrast for the reference level
+
+levels(colData(sub_assay)$Channel)[1]
+L_ref <- makeContrasts(ChannelTMT126, levels = design) # as expected not possible
+rownames(L_ref)[1] <- "(Intercept)"
+contrast_fit <- contrasts.fit(limma_fit, L_ref)
+```
+
+Should I test to find the contrast of the reference ?
 
