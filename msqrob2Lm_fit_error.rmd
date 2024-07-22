@@ -237,10 +237,10 @@ contrast_fit <- contrasts.fit(limma_fit, L)
 # Try to fit the contrast for the reference level
 
 levels(colData(sub_assay)$Channel)[1]
-L_ref <- makeContrasts(ChannelTMT126, levels = design) # as expected not possible
-rownames(L_ref)[1] <- "(Intercept)"
-contrast_fit <- contrasts.fit(limma_fit, L_ref)
+# L_ref <- makeContrasts(ChannelTMT126, levels = design) # as expected not possible
+#rownames(L_ref)[1] <- "(Intercept)"
+#contrast_fit <- contrasts.fit(limma_fit, L_ref)
 ```
 
-Should I test to find the contrast of the reference ?
+
 
