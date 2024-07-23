@@ -230,6 +230,8 @@ design <- model.matrix(~ 1 + Channel + Set + Mock, colData(sub_assay))
 limma_fit <- lmFit(y, design) # still use the reference level like msqrob
 # the model is construct but is rank deficient since the reference level are not composed of any values. Here there are no filtering outside the function, to be investigated
 
+nonEstimable(design) # 3 first are only 0 while the last has 1s
+
 L <- makeContrasts(Mock2, levels = design)
 rownames(L)[1] <- "(Intercept)"
 contrast_fit <- contrasts.fit(limma_fit, L)
@@ -240,7 +242,111 @@ levels(colData(sub_assay)$Channel)[1]
 # L_ref <- makeContrasts(ChannelTMT126, levels = design) # as expected not possible
 #rownames(L_ref)[1] <- "(Intercept)"
 #contrast_fit <- contrasts.fit(limma_fit, L_ref)
+
 ```
 
 
+Limma also use a model matrix, therefore the same problem is present. 
 
+```{r}
+msqrobLm <- function(y,
+    formula,
+    data,
+    robust = TRUE,
+    maxitRob = 5) {
+    myDesign <- model.matrix(formula, data)
+    models <- apply(y, 1,
+        function(y, design) {
+            ## computatability check
+            obs <- is.finite(y)
+            type <- "fitError"
+            model <- list(
+                coefficients = NA, vcovUnscaled = NA,
+                sigma = NA, df.residual = NA, w = NA
+            )
+
+            if (sum(obs) > 0) {
+                ## subset to finite observations, attention with R column switching
+                X <- design[obs, , drop = FALSE]
+                X <- X[,colMeans(X == 0) != 1 , drop = FALSE]
+                y <- y[obs]
+                colnames_orig <- colnames(design)
+
+                if (robust) {
+                    ## use robust regression from MASS package, "M" estimation is used
+                    mod <- try(MASS::rlm(X, y,
+                        method = "M",
+                        maxit = maxitRob
+                    ),
+                    silent = TRUE
+                    )
+                    if (!is(mod, "try-error")) {
+                        type <- "rlm"
+                    }
+                } else {
+                    ## if robust regression is not performed use standard linear fit
+                    mod <- try(lm.fit(X, y))
+                    if ((!is(mod, "try-error")) & mod$rank == ncol(X)) {
+                        type <- "lm"
+                    }
+                }
+
+                if (type == "rlm") {
+                    w <- mod$w
+                    sigma <- sqrt(sum(mod$w * mod$resid^2) / (sum(mod$w) - mod$rank))
+                    df.residual <- sum(mod$w) - mod$rank
+                    if (df.residual < 2L) type <- "fitError"
+                }
+
+                if (type == "lm") {
+                    w <- NULL
+                    sigma <- sqrt(sum(mod$residuals^2 / mod$df.residual))
+                    df.residual <- mod$df.residual
+                    if (df.residual < 2L) type <- "fitError"
+                }
+
+                if (type != "fitError") {
+                    coef <- rep(NA, length(colnames_orig))
+                    names(coef) <- colnames_orig
+                    coef[names(mod$coef)] <- mod$coef
+                    vcovUnscaled <- matrix(NA, nrow =length(colnames_orig), ncol = length(colnames_orig))
+                    rownames(vcovUnscaled) <- colnames(vcovUnscaled) <-  colnames_orig
+                    vcovUnscaled[names(mod$coef), names(mod$coef)] <- msqrob2:::.vcovUnscaled(mod)
+
+                    model <- list(
+                        coefficients = mod$coef,
+                        vcovUnscaled = .vcovUnscaled(mod),
+                        sigma = sigma,
+                        df.residual = df.residual,
+                        w = w
+                    )
+                }
+            }
+            ## return object of class Statmodel (from apply)
+            msqrob2:::.StatModel(
+                type = type,
+                params = model,
+                varPosterior = as.numeric(NA),
+                dfPosterior = as.numeric(NA)
+            )
+        },
+        design = myDesign
+    ) ## end of apply here
+
+    ## Squeeze a set of sample variances together by computing
+    ## empirical Bayes posterior means
+    hlp <- limma::squeezeVar(
+        var = vapply(models, getVar, numeric(1)),
+        df = vapply(models, getDF, numeric(1))
+    )
+
+    ## Put variance and degrees of freedom in appropriate slots
+    for (i in seq_len(length(models))) {
+        mydf <- hlp$df.prior + getDF(models[[i]])
+        models[[i]]@varPosterior <- as.numeric(hlp$var.post[i])
+        models[[i]]@dfPosterior <- as.numeric(mydf)
+    }
+
+    ## Return object of class StatModel
+    return(models)
+```
