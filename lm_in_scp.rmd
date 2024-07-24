@@ -1,0 +1,414 @@
+---
+title: "Linear regression in SCP"
+subtitle: "Resolving the issue of msqrob2"
+author: "Léopold Guyot"
+institute: "UGent"
+date: "24/07/2024"
+output:
+  xaringan::moon_reader:
+    css: styles.css
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      ratio: 16:9
+      countIncrementalSlides: false
+
+---
+
+class:
+
+```{r xaringanExtra, echo=FALSE}
+xaringanExtra::use_tile_view()  ## use o to get an overview
+xaringanExtra::use_fit_screen() ## use Alt-F to fit to screen
+xaringanExtra::use_extra_styles(
+  hover_code_line = TRUE
+  )
+xaringanExtra::use_panelset()
+```
+
+``` {r packages, include=FALSE}
+
+library(QFeatures)
+library(msqrob2)
+library(limma)
+library(scp)
+library(BiocParallel)
+library(tidyverse)
+
+```
+
+
+# Data loading
+
+.panelset[
+.panel[
+.panel-name[Code]
+
+```{r data_loading}
+
+.createMockBalanced <- function(k, runs) {
+    out <- split(runs, runs)
+    out <- lapply(out, function(x) {
+        index <- 1:length(x)
+        x[sample(index)] <- rep(1:k, length.out = length(index))
+        x
+    })
+    out <- S4Vectors::unname(do.call(c, out))
+    as.factor(out)
+}
+
+sce <- readRDS("data/leduc_mock.rds")
+set.seed(1234)
+sce$Mock <- .createMockBalanced(2, sce$Set)
+
+```
+]
+
+.panel[
+.panel-name[Preview]
+
+```{r sce_preview}
+sce
+```
+]
+]
+
+
+---
+class:middle
+
+# Subset of specific peptides
+
+### Non fitted
+
+```{r nfit}
+non_fitted <- sce["AAATAEEPDPK_2",]
+```
+### Fitted with each method
+
+```{r fit}
+fitted <- sce["GAEAANVTGPGGVPVQGSK_3",] # find a new, msqrob not fitting
+```
+
+### Non fitted with msqrob2
+
+```{r nfit_msqrob}
+non_fitted_msqrob <- sce["EATTEFSVDAR_2",]
+```
+
+
+---
+class: 
+
+# Modified version of msqrobLm
+.panelset[
+.panel[
+.panel-name[Comments]
+- The issue with msqrobLm is that it does not handle the case where the model
+is rank deficient.
+- msqrobLm already include a subsetting of the design matrix to remove columns
+that have no information (i.e. all zeros). But it does not handle the case
+where the reference group of a variable has no values, in this case the model
+become rank deficient.
+- To solve this issue, we changed the way the subset is performed by only
+keeping the x first columns of the design matrix, with columns sorted by their
+pivoting rank and x being the rank of the qr decomposition of the design matrix.
+]
+.panel[
+.panel-name[Code]
+
+.scrollable[
+```{r msqrobLm_modif}
+
+msqrob2_fix <- function (y, formula, data, robust = TRUE, maxitRob = 5) 
+{
+    myDesign <- model.matrix(formula, data)
+    models <- apply(y, 1, function(y, design) {
+        obs <- is.finite(y)
+        type <- "fitError"
+        model <- list(coefficients = NA, vcovUnscaled = NA, 
+            sigma = NA, df.residual = NA, w = NA)
+        if (sum(obs) > 0) {
+            X <- design[obs, , drop = FALSE]
+            qrX <- qr(X)
+            X <- X[, qrX$pivot[seq_len(qrX$rank)], drop = FALSE]
+            # => old version
+            # X <- X[, colMeans(X == 0) != 1, drop = FALSE] 
+            y <- y[obs]
+            colnames_orig <- colnames(design)
+            if (robust) {
+                mod <- try(MASS::rlm(X, y, method = "M", maxit = maxitRob), 
+                    silent = TRUE)
+                if (!is(mod, "try-error")) {
+                    type <- "rlm"
+                }
+            }
+            else {
+                mod <- try(lm.fit(X, y))
+                if ((!is(mod, "try-error")) & mod$rank == ncol(X)) {
+                    type <- "lm"
+                }
+            }
+            if (type == "rlm") {
+                w <- mod$w
+                sigma <- sqrt(sum(mod$w * mod$resid^2)/(sum(mod$w) - 
+                    mod$rank))
+                df.residual <- sum(mod$w) - mod$rank
+                if (df.residual < 2L) 
+                    type <- "fitError"
+            }
+            if (type == "lm") {
+                w <- NULL
+                sigma <- sqrt(sum(mod$residuals^2/mod$df.residual))
+                df.residual <- mod$df.residual
+                if (df.residual < 2L) 
+                    type <- "fitError"
+            }
+            if (type != "fitError") {
+                coef <- rep(NA, length(colnames_orig))
+                names(coef) <- colnames_orig
+                coef[names(mod$coef)] <- mod$coef
+                vcovUnscaled <- matrix(NA, nrow = length(colnames_orig), 
+                    ncol = length(colnames_orig))
+                rownames(vcovUnscaled) <- colnames(vcovUnscaled) <- colnames_orig
+                vcovUnscaled[names(mod$coef), names(mod$coef)] <- msqrob2:::.vcovUnscaled(mod)
+                model <- list(coefficients = mod$coef, vcovUnscaled = msqrob2:::.vcovUnscaled(mod), 
+                    sigma = sigma, df.residual = df.residual, 
+                    w = w)
+            }
+        }
+        .StatModel(type = type, params = model, varPosterior = as.numeric(NA), 
+            dfPosterior = as.numeric(NA))
+    }, design = myDesign)
+    hlp <- limma::squeezeVar(var = vapply(models, getVar, numeric(1)), 
+        df = vapply(models, getDF, numeric(1)))
+    for (i in seq_len(length(models))) {
+        mydf <- hlp$df.prior + getDF(models[[i]])
+        models[[i]]@varPosterior <- as.numeric(hlp$var.post[i])
+        models[[i]]@dfPosterior <- as.numeric(mydf)
+    }
+    return(models)
+}
+
+```
+
+]
+]
+]
+
+---
+class:
+
+# Modelling
+
+.panelset[
+.panel[
+.panel-name[Non fitted]
+
+```{r modelling_nfit, results = 'hide', warning=FALSE}
+scp_nfit <- scp::scpModelWorkflow(non_fitted,
+                             formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_nfit <- msqrob2::msqrobLm(assay(non_fitted),
+                                   ~ 1 + Channel + Set + Mock,
+                                   colData(non_fitted),
+                                   robust = FALSE)
+msqrobLm_fix_nfit <- msqrob2_fix(assay(non_fitted),
+                           ~ 1 + Channel + Set + Mock,
+                           colData(non_fitted),
+                           robust = FALSE)
+y <- assay(non_fitted)
+design <- model.matrix(~ 1 + Channel + Set + Mock, colData(non_fitted))
+limma_nfit <- limma::lmFit(y, design)
+```
+]
+
+.panel[
+.panel-name[Fitted with each method]
+
+
+```{r modelling_fit, results = 'hide', warning=FALSE}
+scp_fit <- scp::scpModelWorkflow(fitted,
+                            formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_fit <- msqrob2::msqrobLm(assay(fitted),
+                                  ~ 1 + Channel + Set + Mock,
+                                  colData(fitted),
+                                  robust = FALSE)
+msqrobLm_fix_fit <- msqrob2_fix(assay(fitted),
+                            ~ 1 + Channel + Set + Mock,
+                            colData(fitted),
+                            robust = FALSE)
+y <- assay(fitted)
+design <- model.matrix(~ 1 + Channel + Set + Mock, colData(fitted))
+limma_fit <- limma::lmFit(y, design)
+```
+
+]
+.panel[
+.panel-name[Non fitted with msqrobLm]
+
+
+```{r modelling_fit_msqrob, results = 'hide', warning=FALSE}
+scp_nfit_msqrob <- scp::scpModelWorkflow(non_fitted_msqrob,
+                                          formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_nfit_msqrob <- msqrob2::msqrobLm(assay(non_fitted_msqrob),
+                                          ~ 1 + Channel + Set + Mock,
+                                          colData(non_fitted_msqrob),
+                                          robust = FALSE)
+msqrobLm_fix_nfit_msqrob <- msqrob2_fix(assay(non_fitted_msqrob),
+                                        ~ 1 + Channel + Set + Mock,
+                                        colData(non_fitted_msqrob),
+                                        robust = FALSE)
+y <- assay(non_fitted_msqrob)
+design <- model.matrix(~ 1 + Channel + Set + Mock, colData(non_fitted_msqrob))
+limma_nfit_msqrob <- limma::lmFit(y, design)
+```
+
+]
+
+
+]
+---
+
+# Results non fitted
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+```{r results_nfit}
+
+result_scp_nfit <- scpModelFilterNPRatio(scp_nfit, filtered = FALSE)
+result_msqrobLm_nfit <- msqrobLm_nfit[[1]]@type
+result_msqrobLm_fix_nfit <- msqrobLm_fix_nfit[[1]]@type
+result_limma_nfit <- sum(!is.na(limma_nfit$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_nfit))
+print("Some coefficients are still estimated due to theuse of a ridge regression.")
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_nfit,
+            "model."))
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_nfit,
+            "model."))
+print(paste("The limma model return",
+            result_limma_nfit,
+            "coefficients."))
+```
+]]
+
+.panel[
+.panel-name[Comments]
+- The scplainer model return a NP ratio that is less than 1, which means that 
+this model is not usable in the scplainer workflow. But some coefficients are
+still estimated due to the use of a ridge regression.
+- The msqrobLm model return a fitError model, which means that the model is not
+estimable
+- The msqrobLm model with the fix return a fitError model, which means that 
+the model is not estimable
+- The limma model return some coefficients, which means that the model still
+return a normal output even with poor data
+]]
+
+---
+
+# Results fitted with each method
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+```{r results_fit}
+
+result_scp_fit <- scp::scpModelFilterNPRatio(scp_fit, filtered = FALSE)
+result_msqrobLm_fit <- msqrobLm_fit[[1]]@type
+result_msqrobLm_fix_fit <- msqrobLm_fix_fit[[1]]@type
+result_limma_fit <- sum(!is.na(limma_fit$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_fit))
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_fit,
+            "model."))
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_fit,
+            "model."))
+print(paste("The limma model return",
+            result_limma_fit,
+            "coefficients."))
+```
+]]
+.panel[
+.panel-name[Coefficients results]
+.scrollable[
+
+```{r coef_fit}
+coef_scp_fit <- scp:::scpModelCoefficients(scp_fit)[[1]]
+coef_msqrobLm_fit <- getCoef(msqrobLm_fit[[1]])
+coef_msqrobLm_fix_fit <- getCoef(msqrobLm_fix_fit[[1]])
+coef_limma_fit <- limma_fit$coefficients
+```
+]]
+
+.panel[
+.panel-name[Comments]
+
+]]
+
+---
+
+# Results non fitted with msqrob2
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+```{r results_nfit_msqrob}
+
+result_scp_nfit_msqrob <- scp::scpModelFilterNPRatio(scp_nfit_msqrob, filtered = FALSE)
+result_msqrobLm_nfit_msqrob <- msqrobLm_nfit_msqrob[[1]]@type
+result_msqrobLm_fix_nfit_msqrob <- msqrobLm_fix_nfit_msqrob[[1]]@type
+result_limma_nfit_msqrob <- sum(!is.na(limma_nfit_msqrob$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_nfit_msqrob))
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_nfit_msqrob,
+            "model."))
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_nfit_msqrob,
+            "model."))
+print(paste("The limma model return",
+            result_limma_nfit_msqrob,
+            "coefficients."))
+```
+]]
+.panel[
+.panel-name[Coefficients results]
+.scrollable[
+
+```{r coef_nfit_msqrob}
+coef_scp_nfit_msqrob <- scp:::scpModelCoefficients(scp_nfit_msqrob)[[1]]
+coef_msqrobLm_nfit_msqrob <- getCoef(msqrobLm_nfit_msqrob[[1]])
+coef_msqrobLm_fix_nfit_msqrob <- getCoef(msqrobLm_fix_nfit_msqrob[[1]])
+coef_limma_nfit_msqrob <- limma_nfit_msqrob$coefficients
+
+summary_coef_nfit_msqrob <- full_join(data.frame("parameter" = names(coef_msqrobLm_fix_nfit_msqrob),
+                    "coefficient_msqrobLm_fix" = coef_msqrobLm_fix_nfit_msqrob),
+      data.frame("parameter" = colnames(coef_limma_nfit_msqrob),
+                    "coefficient_limma" = as.numeric(coef_limma_nfit_msqrob)), by = "parameter")
+plot(x = summary_coef_nfit_msqrob$coefficient_msqrobLm_fix, y = summary_coef_nfit_msqrob$coefficient_limma)
+summary_coef_nfit_msqrob <- pivot_longer(summary_coef_nfit_msqrob,
+                                         cols = c("coefficient_msqrobLm_fix", "coefficient_limma"),
+                                         names_to = "model",
+                                         values_to = "coefficient")
+
+
+```
+]]
+
+.panel[
+.panel-name[Comments]
+
+]]

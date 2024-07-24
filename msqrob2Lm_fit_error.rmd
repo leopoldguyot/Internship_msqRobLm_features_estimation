@@ -44,7 +44,7 @@ EATTEFSVDAR_2 was chosen because this peptide was successfully fitted with scpla
 # Fit with msqrob2Lm
 
 ```{r}
-msqrobLm(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay))
+msqrobLm(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay), robust = FALSE)
 
 ```
 
@@ -232,7 +232,7 @@ limma_fit <- lmFit(y, design) # still use the reference level like msqrob
 
 nonEstimable(design) # 3 first are only 0 while the last has 1s
 
-L <- makeContrasts(Mock2, levels = design)
+L <- makeContrasts(SetwAL00286, levels = design)
 rownames(L)[1] <- "(Intercept)"
 contrast_fit <- contrasts.fit(limma_fit, L)
 
@@ -249,7 +249,7 @@ levels(colData(sub_assay)$Channel)[1]
 Limma also use a model matrix, therefore the same problem is present. 
 
 ```{r}
-msqrobLm <- function(y,
+msqrobLm2 <- function(y,
     formula,
     data,
     robust = TRUE,
@@ -274,19 +274,17 @@ msqrobLm <- function(y,
 
                 if (robust) {
                     ## use robust regression from MASS package, "M" estimation is used
-                    mod <- try(MASS::rlm(X, y,
+                    mod <- MASS::rlm(X, y,
                         method = "M",
-                        maxit = maxitRob
-                    ),
-                    silent = TRUE
-                    )
+                        maxit = maxitRob)
                     if (!is(mod, "try-error")) {
+                        print("test2")
                         type <- "rlm"
                     }
                 } else {
                     ## if robust regression is not performed use standard linear fit
                     mod <- try(lm.fit(X, y))
-                    if ((!is(mod, "try-error")) & mod$rank == ncol(X)) {
+                    if ((!is(mod, "try-error"))) { # changed
                         type <- "lm"
                     }
                 }
@@ -315,7 +313,7 @@ msqrobLm <- function(y,
 
                     model <- list(
                         coefficients = mod$coef,
-                        vcovUnscaled = .vcovUnscaled(mod),
+                        vcovUnscaled = msqrob2:::.vcovUnscaled(mod),
                         sigma = sigma,
                         df.residual = df.residual,
                         w = w
@@ -349,4 +347,10 @@ msqrobLm <- function(y,
 
     ## Return object of class StatModel
     return(models)
+}
+
+msqrobLm(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay), robust = FALSE)
+msqrobLm2(assay(sub_assay), ~ -1 + Channel + Set + Mock, colData(sub_assay), robust = T) # works for ls but not for robust, this is because rlm check in intern if qr(x)$rank < ncol(x)
+
+
 ```

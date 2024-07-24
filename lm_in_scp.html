@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>Linear regression in SCP</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="Léopold Guyot" />
+    <script src="libs/header-attrs-2.27/header-attrs.js"></script>
+    <link href="libs/tile-view-0.2.6/tile-view.css" rel="stylesheet" />
+    <script src="libs/tile-view-0.2.6/tile-view.js"></script>
+    <script src="libs/xaringanExtra_fit-screen-0.2.6/fit-screen.js"></script>
+    <link href="libs/xaringanExtra-extra-styles-0.2.6/xaringanExtra-extra-styles.css" rel="stylesheet" />
+    <link href="libs/panelset-0.3.0/panelset.css" rel="stylesheet" />
+    <script src="libs/panelset-0.3.0/panelset.js"></script>
+    <link rel="stylesheet" href="styles.css" type="text/css" />
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+.title[
+# Linear regression in SCP
+]
+.subtitle[
+## Resolving the issue of msqrob2
+]
+.author[
+### Léopold Guyot
+]
+.institute[
+### UGent
+]
+.date[
+### 24/07/2024
+]
+
+---
+
+
+class:
+
+
+
+
+
+
+# Data loading
+
+.panelset[
+.panel[
+.panel-name[Code]
+
+
+``` r
+.createMockBalanced &lt;- function(k, runs) {
+    out &lt;- split(runs, runs)
+    out &lt;- lapply(out, function(x) {
+        index &lt;- 1:length(x)
+        x[sample(index)] &lt;- rep(1:k, length.out = length(index))
+        x
+    })
+    out &lt;- S4Vectors::unname(do.call(c, out))
+    as.factor(out)
+}
+
+sce &lt;- readRDS("data/leduc_mock.rds")
+set.seed(1234)
+sce$Mock &lt;- .createMockBalanced(2, sce$Set)
+```
+]
+
+.panel[
+.panel-name[Preview]
+
+
+``` r
+sce
+```
+
+```
+## class: SingleCellExperiment 
+## dim: 18137 818 
+## metadata(0):
+## assays(1): ''
+## rownames(18137): LVLVGDGGTGK_3 LVAQLYK_2 ... GEIIILWTR_2
+##   EGPGTPPTTLARGK_4
+## rowData names(23): Sequence Length ... PsmId isSharedPeptide
+## colnames(818): eAL00219RI5 eAL00219RI6 ... wAL00286RI12 wAL00286RI14
+## colData names(23): Set WellPooled ... passQC Mock
+## reducedDimNames(0):
+## mainExpName: NULL
+## altExpNames(0):
+```
+]
+]
+
+
+---
+class:middle
+
+# Subset of specific peptides
+
+### Non fitted
+
+
+``` r
+non_fitted &lt;- sce["AAATAEEPDPK_2",]
+```
+### Fitted with each method
+
+
+``` r
+fitted &lt;- sce["GAEAANVTGPGGVPVQGSK_3",] # find a new, msqrob not fitting
+```
+
+### Non fitted with msqrob2
+
+
+``` r
+non_fitted_msqrob &lt;- sce["EATTEFSVDAR_2",]
+```
+
+
+---
+class: 
+
+# Modified version of msqrobLm
+.panelset[
+.panel[
+.panel-name[Comments]
+- The issue with msqrobLm is that it does not handle the case where the model
+is rank deficient.
+- msqrobLm already include a subsetting of the design matrix to remove columns
+that have no information (i.e. all zeros). But it does not handle the case
+where the reference group of a variable has no values, in this case the model
+become rank deficient.
+- To solve this issue, we changed the way the subset is performed by only
+keeping the x first columns of the design matrix, with columns sorted by their
+pivoting rank and x being the rank of the qr decomposition of the design matrix.
+]
+.panel[
+.panel-name[Code]
+
+.scrollable[
+
+``` r
+msqrob2_fix &lt;- function (y, formula, data, robust = TRUE, maxitRob = 5) 
+{
+    myDesign &lt;- model.matrix(formula, data)
+    models &lt;- apply(y, 1, function(y, design) {
+        obs &lt;- is.finite(y)
+        type &lt;- "fitError"
+        model &lt;- list(coefficients = NA, vcovUnscaled = NA, 
+            sigma = NA, df.residual = NA, w = NA)
+        if (sum(obs) &gt; 0) {
+            X &lt;- design[obs, , drop = FALSE]
+            qrX &lt;- qr(X)
+            X &lt;- X[, qrX$pivot[seq_len(qrX$rank)], drop = FALSE]
+            # =&gt; old version
+            # X &lt;- X[, colMeans(X == 0) != 1, drop = FALSE] 
+            y &lt;- y[obs]
+            colnames_orig &lt;- colnames(design)
+            if (robust) {
+                mod &lt;- try(MASS::rlm(X, y, method = "M", maxit = maxitRob), 
+                    silent = TRUE)
+                if (!is(mod, "try-error")) {
+                    type &lt;- "rlm"
+                }
+            }
+            else {
+                mod &lt;- try(lm.fit(X, y))
+                if ((!is(mod, "try-error")) &amp; mod$rank == ncol(X)) {
+                    type &lt;- "lm"
+                }
+            }
+            if (type == "rlm") {
+                w &lt;- mod$w
+                sigma &lt;- sqrt(sum(mod$w * mod$resid^2)/(sum(mod$w) - 
+                    mod$rank))
+                df.residual &lt;- sum(mod$w) - mod$rank
+                if (df.residual &lt; 2L) 
+                    type &lt;- "fitError"
+            }
+            if (type == "lm") {
+                w &lt;- NULL
+                sigma &lt;- sqrt(sum(mod$residuals^2/mod$df.residual))
+                df.residual &lt;- mod$df.residual
+                if (df.residual &lt; 2L) 
+                    type &lt;- "fitError"
+            }
+            if (type != "fitError") {
+                coef &lt;- rep(NA, length(colnames_orig))
+                names(coef) &lt;- colnames_orig
+                coef[names(mod$coef)] &lt;- mod$coef
+                vcovUnscaled &lt;- matrix(NA, nrow = length(colnames_orig), 
+                    ncol = length(colnames_orig))
+                rownames(vcovUnscaled) &lt;- colnames(vcovUnscaled) &lt;- colnames_orig
+                vcovUnscaled[names(mod$coef), names(mod$coef)] &lt;- msqrob2:::.vcovUnscaled(mod)
+                model &lt;- list(coefficients = mod$coef, vcovUnscaled = msqrob2:::.vcovUnscaled(mod), 
+                    sigma = sigma, df.residual = df.residual, 
+                    w = w)
+            }
+        }
+        .StatModel(type = type, params = model, varPosterior = as.numeric(NA), 
+            dfPosterior = as.numeric(NA))
+    }, design = myDesign)
+    hlp &lt;- limma::squeezeVar(var = vapply(models, getVar, numeric(1)), 
+        df = vapply(models, getDF, numeric(1)))
+    for (i in seq_len(length(models))) {
+        mydf &lt;- hlp$df.prior + getDF(models[[i]])
+        models[[i]]@varPosterior &lt;- as.numeric(hlp$var.post[i])
+        models[[i]]@dfPosterior &lt;- as.numeric(mydf)
+    }
+    return(models)
+}
+```
+
+]
+]
+]
+
+---
+class:
+
+# Modelling
+
+.panelset[
+.panel[
+.panel-name[Non fitted]
+
+
+``` r
+scp_nfit &lt;- scp::scpModelWorkflow(non_fitted,
+                             formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_nfit &lt;- msqrob2::msqrobLm(assay(non_fitted),
+                                   ~ 1 + Channel + Set + Mock,
+                                   colData(non_fitted),
+                                   robust = FALSE)
+msqrobLm_fix_nfit &lt;- msqrob2_fix(assay(non_fitted),
+                           ~ 1 + Channel + Set + Mock,
+                           colData(non_fitted),
+                           robust = FALSE)
+y &lt;- assay(non_fitted)
+design &lt;- model.matrix(~ 1 + Channel + Set + Mock, colData(non_fitted))
+limma_nfit &lt;- limma::lmFit(y, design)
+```
+]
+
+.panel[
+.panel-name[Fitted with each method]
+
+
+
+``` r
+scp_fit &lt;- scp::scpModelWorkflow(fitted,
+                            formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_fit &lt;- msqrob2::msqrobLm(assay(fitted),
+                                  ~ 1 + Channel + Set + Mock,
+                                  colData(fitted),
+                                  robust = FALSE)
+msqrobLm_fix_fit &lt;- msqrob2_fix(assay(fitted),
+                            ~ 1 + Channel + Set + Mock,
+                            colData(fitted),
+                            robust = FALSE)
+y &lt;- assay(fitted)
+design &lt;- model.matrix(~ 1 + Channel + Set + Mock, colData(fitted))
+limma_fit &lt;- limma::lmFit(y, design)
+```
+
+]
+.panel[
+.panel-name[Non fitted with msqrobLm]
+
+
+
+``` r
+scp_nfit_msqrob &lt;- scp::scpModelWorkflow(non_fitted_msqrob,
+                                          formula = ~ 1 + Channel + Set + Mock)
+msqrobLm_nfit_msqrob &lt;- msqrob2::msqrobLm(assay(non_fitted_msqrob),
+                                          ~ 1 + Channel + Set + Mock,
+                                          colData(non_fitted_msqrob),
+                                          robust = FALSE)
+msqrobLm_fix_nfit_msqrob &lt;- msqrob2_fix(assay(non_fitted_msqrob),
+                                        ~ 1 + Channel + Set + Mock,
+                                        colData(non_fitted_msqrob),
+                                        robust = FALSE)
+y &lt;- assay(non_fitted_msqrob)
+design &lt;- model.matrix(~ 1 + Channel + Set + Mock, colData(non_fitted_msqrob))
+limma_nfit_msqrob &lt;- limma::lmFit(y, design)
+```
+
+]
+
+
+]
+---
+
+# Results non fitted
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+
+``` r
+result_scp_nfit &lt;- scpModelFilterNPRatio(scp_nfit, filtered = FALSE)
+result_msqrobLm_nfit &lt;- msqrobLm_nfit[[1]]@type
+result_msqrobLm_fix_nfit &lt;- msqrobLm_fix_nfit[[1]]@type
+result_limma_nfit &lt;- sum(!is.na(limma_nfit$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_nfit))
+```
+
+```
+## [1] "The scplainer model return a NP ratio that is equal to 0.866666666666667"
+```
+
+``` r
+print("Some coefficients are still estimated due to theuse of a ridge regression.")
+```
+
+```
+## [1] "Some coefficients are still estimated due to theuse of a ridge regression."
+```
+
+``` r
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_nfit,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model return a fitError model."
+```
+
+``` r
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_nfit,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model with the fix return a fitError model."
+```
+
+``` r
+print(paste("The limma model return",
+            result_limma_nfit,
+            "coefficients."))
+```
+
+```
+## [1] "The limma model return 26 coefficients."
+```
+]]
+
+.panel[
+.panel-name[Comments]
+- The scplainer model return a NP ratio that is less than 1, which means that 
+this model is not usable in the scplainer workflow. But some coefficients are
+still estimated due to the use of a ridge regression.
+- The msqrobLm model return a fitError model, which means that the model is not
+estimable
+- The msqrobLm model with the fix return a fitError model, which means that 
+the model is not estimable
+- The limma model return some coefficients, which means that the model still
+return a normal output even with poor data
+]]
+
+---
+
+# Results fitted with each method
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+
+``` r
+result_scp_fit &lt;- scp::scpModelFilterNPRatio(scp_fit, filtered = FALSE)
+result_msqrobLm_fit &lt;- msqrobLm_fit[[1]]@type
+result_msqrobLm_fix_fit &lt;- msqrobLm_fix_fit[[1]]@type
+result_limma_fit &lt;- sum(!is.na(limma_fit$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_fit))
+```
+
+```
+## [1] "The scplainer model return a NP ratio that is equal to 4.47857142857143"
+```
+
+``` r
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_fit,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model return a fitError model."
+```
+
+``` r
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_fit,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model with the fix return a lm model."
+```
+
+``` r
+print(paste("The limma model return",
+            result_limma_fit,
+            "coefficients."))
+```
+
+```
+## [1] "The limma model return 140 coefficients."
+```
+]]
+.panel[
+.panel-name[Coefficients results]
+.scrollable[
+
+
+``` r
+coef_scp_fit &lt;- scp:::scpModelCoefficients(scp_fit)[[1]]
+coef_msqrobLm_fit &lt;- getCoef(msqrobLm_fit[[1]])
+coef_msqrobLm_fix_fit &lt;- getCoef(msqrobLm_fix_fit[[1]])
+coef_limma_fit &lt;- limma_fit$coefficients
+```
+]]
+
+.panel[
+.panel-name[Comments]
+
+]]
+
+---
+
+# Results non fitted with msqrob2
+
+.panelset[
+.panel[
+.panel-name[Success results]
+.scrollable[
+
+``` r
+result_scp_nfit_msqrob &lt;- scp::scpModelFilterNPRatio(scp_nfit_msqrob, filtered = FALSE)
+result_msqrobLm_nfit_msqrob &lt;- msqrobLm_nfit_msqrob[[1]]@type
+result_msqrobLm_fix_nfit_msqrob &lt;- msqrobLm_fix_nfit_msqrob[[1]]@type
+result_limma_nfit_msqrob &lt;- sum(!is.na(limma_nfit_msqrob$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_nfit_msqrob))
+```
+
+```
+## [1] "The scplainer model return a NP ratio that is equal to 4.26851851851852"
+```
+
+``` r
+print(paste("The msqrobLm model return a",
+            result_msqrobLm_nfit_msqrob,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model return a fitError model."
+```
+
+``` r
+print(paste("The msqrobLm model with the fix return a"
+            , result_msqrobLm_fix_nfit_msqrob,
+            "model."))
+```
+
+```
+## [1] "The msqrobLm model with the fix return a lm model."
+```
+
+``` r
+print(paste("The limma model return",
+            result_limma_nfit_msqrob,
+            "coefficients."))
+```
+
+```
+## [1] "The limma model return 108 coefficients."
+```
+]]
+.panel[
+.panel-name[Coefficients results]
+.scrollable[
+
+
+``` r
+coef_scp_nfit_msqrob &lt;- scp:::scpModelCoefficients(scp_nfit_msqrob)[[1]]
+coef_msqrobLm_nfit_msqrob &lt;- getCoef(msqrobLm_nfit_msqrob[[1]])
+coef_msqrobLm_fix_nfit_msqrob &lt;- getCoef(msqrobLm_fix_nfit_msqrob[[1]])
+coef_limma_nfit_msqrob &lt;- limma_nfit_msqrob$coefficients
+
+summary_coef_nfit_msqrob &lt;- full_join(data.frame("parameter" = names(coef_msqrobLm_fix_nfit_msqrob),
+                    "coefficient_msqrobLm_fix" = coef_msqrobLm_fix_nfit_msqrob),
+      data.frame("parameter" = colnames(coef_limma_nfit_msqrob),
+                    "coefficient_limma" = as.numeric(coef_limma_nfit_msqrob)), by = "parameter")
+plot(x = summary_coef_nfit_msqrob$coefficient_msqrobLm_fix, y = summary_coef_nfit_msqrob$coefficient_limma)
+```
+
+![](lm_in_scp_files/figure-html/coef_nfit_msqrob-1.png)&lt;!-- --&gt;
+
+``` r
+summary_coef_nfit_msqrob &lt;- pivot_longer(summary_coef_nfit_msqrob,
+                                         cols = c("coefficient_msqrobLm_fix", "coefficient_limma"),
+                                         names_to = "model",
+                                         values_to = "coefficient")
+```
+]]
+
+.panel[
+.panel-name[Comments]
+
+]]
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"ratio": "16:9",
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+// add `data-at-shortcutkeys` attribute to <body> to resolve conflicts with JAWS
+// screen reader (see PR #262)
+(function(d) {
+  let res = {};
+  d.querySelectorAll('.remark-help-content table tr').forEach(tr => {
+    const t = tr.querySelector('td:nth-child(2)').innerText;
+    tr.querySelectorAll('td:first-child .key').forEach(key => {
+      const k = key.innerText;
+      if (/^[a-z]$/.test(k)) res[k] = t;  // must be a single letter (key)
+    });
+  });
+  d.body.setAttribute('data-at-shortcutkeys', JSON.stringify(res));
+})(document);
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>
