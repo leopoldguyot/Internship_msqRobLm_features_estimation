@@ -13,6 +13,8 @@ output:
       highlightLines: true
       ratio: 16:9
       countIncrementalSlides: false
+      navigation:
+        scroll: false
 
 ---
 
@@ -35,6 +37,8 @@ library(limma)
 library(scp)
 library(BiocParallel)
 library(tidyverse)
+library(plotly)
+library(DT)
 
 ```
 
@@ -79,24 +83,27 @@ sce
 class:middle
 
 # Subset of specific peptides
-
+.scrollable[
 ### Non fitted
+Model for a peptide that is not fitted neither for scplainer and msqrob2
 
 ```{r nfit}
 non_fitted <- sce["AAATAEEPDPK_2",]
 ```
 ### Fitted with each method
+Model for a paetide that is fitted for each method
 
 ```{r fit}
-fitted <- sce["GAEAANVTGPGGVPVQGSK_3",] # find a new, msqrob not fitting
+fitted <- sce["GAEAANVTGPGGVPVQGSK_3",]
 ```
 
 ### Non fitted with msqrob2
+Model for a peptide that is not fitted only for msqrob2
 
 ```{r nfit_msqrob}
 non_fitted_msqrob <- sce["EATTEFSVDAR_2",]
 ```
-
+]
 
 ---
 class: 
@@ -105,7 +112,8 @@ class:
 .panelset[
 .panel[
 .panel-name[Comments]
-- The issue with msqrobLm is that it does not handle the case where the model
+.bigger1[
+- The issue with msqrobLm is that it does not allow the case where the model
 is rank deficient.
 - msqrobLm already include a subsetting of the design matrix to remove columns
 that have no information (i.e. all zeros). But it does not handle the case
@@ -114,6 +122,9 @@ become rank deficient.
 - To solve this issue, we changed the way the subset is performed by only
 keeping the x first columns of the design matrix, with columns sorted by their
 pivoting rank and x being the rank of the qr decomposition of the design matrix.
+- PS: msqrobLm is not able to fit models for all the peptides, so we will use
+msqrob2::msqrob that use msqrobLm under the hood to fit the models.
+]
 ]
 .panel[
 .panel-name[Code]
@@ -132,7 +143,7 @@ msqrob2_fix <- function (y, formula, data, robust = TRUE, maxitRob = 5)
         if (sum(obs) > 0) {
             X <- design[obs, , drop = FALSE]
             qrX <- qr(X)
-            X <- X[, qrX$pivot[seq_len(qrX$rank)], drop = FALSE]
+            X <- X[, qrX$pivot[seq_len(qrX$rank)], drop = FALSE] # change
             # => old version
             # X <- X[, colMeans(X == 0) != 1, drop = FALSE] 
             y <- y[obs]
@@ -209,10 +220,10 @@ class:
 ```{r modelling_nfit, results = 'hide', warning=FALSE}
 scp_nfit <- scp::scpModelWorkflow(non_fitted,
                              formula = ~ 1 + Channel + Set + Mock)
-msqrobLm_nfit <- msqrob2::msqrobLm(assay(non_fitted),
+msqrob_nfit <- rowData(msqrob2::msqrob(non_fitted,
                                    ~ 1 + Channel + Set + Mock,
-                                   colData(non_fitted),
-                                   robust = FALSE)
+                                   robust = FALSE,
+                                   ridge = FALSE))$msqrobModels[[1]]
 msqrobLm_fix_nfit <- msqrob2_fix(assay(non_fitted),
                            ~ 1 + Channel + Set + Mock,
                            colData(non_fitted),
@@ -230,10 +241,10 @@ limma_nfit <- limma::lmFit(y, design)
 ```{r modelling_fit, results = 'hide', warning=FALSE}
 scp_fit <- scp::scpModelWorkflow(fitted,
                             formula = ~ 1 + Channel + Set + Mock)
-msqrobLm_fit <- msqrob2::msqrobLm(assay(fitted),
-                                  ~ 1 + Channel + Set + Mock,
-                                  colData(fitted),
-                                  robust = FALSE)
+msqrob_fit <- rowData(msqrob2::msqrob(fitted,
+                                   ~ 1 + Channel + Set + Mock,
+                                   robust = FALSE,
+                                   ridge = FALSE))$msqrobModels[[1]]
 msqrobLm_fix_fit <- msqrob2_fix(assay(fitted),
                             ~ 1 + Channel + Set + Mock,
                             colData(fitted),
@@ -251,10 +262,10 @@ limma_fit <- limma::lmFit(y, design)
 ```{r modelling_fit_msqrob, results = 'hide', warning=FALSE}
 scp_nfit_msqrob <- scp::scpModelWorkflow(non_fitted_msqrob,
                                           formula = ~ 1 + Channel + Set + Mock)
-msqrobLm_nfit_msqrob <- msqrob2::msqrobLm(assay(non_fitted_msqrob),
-                                          ~ 1 + Channel + Set + Mock,
-                                          colData(non_fitted_msqrob),
-                                          robust = FALSE)
+msqrob_nfit_msqrob <- rowData(msqrob2::msqrob(non_fitted_msqrob,
+                                   ~ 1 + Channel + Set + Mock,
+                                   robust = FALSE,
+                                   ridge = FALSE))$msqrobModels[[1]]
 msqrobLm_fix_nfit_msqrob <- msqrob2_fix(assay(non_fitted_msqrob),
                                         ~ 1 + Channel + Set + Mock,
                                         colData(non_fitted_msqrob),
@@ -274,32 +285,8 @@ limma_nfit_msqrob <- limma::lmFit(y, design)
 
 .panelset[
 .panel[
-.panel-name[Success results]
-.scrollable[
-```{r results_nfit}
-
-result_scp_nfit <- scpModelFilterNPRatio(scp_nfit, filtered = FALSE)
-result_msqrobLm_nfit <- msqrobLm_nfit[[1]]@type
-result_msqrobLm_fix_nfit <- msqrobLm_fix_nfit[[1]]@type
-result_limma_nfit <- sum(!is.na(limma_nfit$coefficients))
-
-print(paste("The scplainer model return a NP ratio that is equal to",
-            result_scp_nfit))
-print("Some coefficients are still estimated due to theuse of a ridge regression.")
-print(paste("The msqrobLm model return a",
-            result_msqrobLm_nfit,
-            "model."))
-print(paste("The msqrobLm model with the fix return a"
-            , result_msqrobLm_fix_nfit,
-            "model."))
-print(paste("The limma model return",
-            result_limma_nfit,
-            "coefficients."))
-```
-]]
-
-.panel[
-.panel-name[Comments]
+.panel-name[Success Results Comments]
+.bigger1[
 - The scplainer model return a NP ratio that is less than 1, which means that 
 this model is not usable in the scplainer workflow. But some coefficients are
 still estimated due to the use of a ridge regression.
@@ -308,30 +295,67 @@ estimable
 - The msqrobLm model with the fix return a fitError model, which means that 
 the model is not estimable
 - The limma model return some coefficients, which means that the model still
-return a normal output even with poor data
-]]
+return a normal output even with poor data. This can cause a problem since these
+coefficients are not reliable, and will be taken into account in the
+multiple test correction.
+]
+]
 
+.panel[
+.panel-name[Success Results Code]
+.scrollable[
+```{r results_nfit}
+
+result_scp_nfit <- scpModelFilterNPRatio(scp_nfit, filtered = FALSE)
+result_msqrob_nfit <- msqrob_nfit@type
+result_msqrobLm_fix_nfit <- msqrobLm_fix_nfit[[1]]@type
+result_limma_nfit <- sum(!is.na(limma_nfit$coefficients))
+
+print(paste("The scplainer model return a NP ratio that is equal to",
+            result_scp_nfit))
+print("Some coefficients are still estimated due to theuse of a ridge regression.")
+print(paste("The msqrob model return a",
+            result_msqrob_nfit,
+            "model."))
+print(paste("The msqrob model with the fix return a"
+            , result_msqrobLm_fix_nfit,
+            "model."))
+print(paste("The limma model return",
+            result_limma_nfit,
+            "coefficients."))
+```
+]]
+]
 ---
 
 # Results fitted with each method
 
 .panelset[
 .panel[
-.panel-name[Success results]
+.panel-name[Success Results Comments]
+.bigger1-5[
+As intended, each method fitted a model for the peptide. scplainer return a 
+NP ration larger than 1 indicating that the model is usable in the scplainer
+workflow. And both the normal and fixed msqrob return a model. limma also return
+a model.
+]
+]
+.panel[
+.panel-name[Success Results Code]
 .scrollable[
 ```{r results_fit}
 
 result_scp_fit <- scp::scpModelFilterNPRatio(scp_fit, filtered = FALSE)
-result_msqrobLm_fit <- msqrobLm_fit[[1]]@type
+result_msqrob_fit <- msqrob_fit@type
 result_msqrobLm_fix_fit <- msqrobLm_fix_fit[[1]]@type
 result_limma_fit <- sum(!is.na(limma_fit$coefficients))
 
 print(paste("The scplainer model return a NP ratio that is equal to",
             result_scp_fit))
-print(paste("The msqrobLm model return a",
-            result_msqrobLm_fit,
+print(paste("The msqrob model return a",
+            result_msqrob_fit,
             "model."))
-print(paste("The msqrobLm model with the fix return a"
+print(paste("The msqrob model with the fix return a"
             , result_msqrobLm_fix_fit,
             "model."))
 print(paste("The limma model return",
@@ -339,21 +363,51 @@ print(paste("The limma model return",
             "coefficients."))
 ```
 ]]
+]
+---
+
+# Results fitted with each method
+.panelset[
 .panel[
-.panel-name[Coefficients results]
+.panel-name[Coefficients results Code]
 .scrollable[
 
 ```{r coef_fit}
-coef_scp_fit <- scp:::scpModelCoefficients(scp_fit)[[1]]
-coef_msqrobLm_fit <- getCoef(msqrobLm_fit[[1]])
+coef_msqrob_fit <- getCoef(msqrob_fit)
 coef_msqrobLm_fix_fit <- getCoef(msqrobLm_fix_fit[[1]])
 coef_limma_fit <- limma_fit$coefficients
+
+
+summary_coef_fit <- full_join(full_join(
+      data.frame("parameter" = names(coef_msqrob_fit),
+                    "coefficient_msqrob" = coef_msqrob_fit),
+      data.frame("parameter" = names(coef_msqrobLm_fix_fit),
+                    "coefficient_msqrobLm_fix" = coef_msqrobLm_fix_fit),
+      by = "parameter"),
+      data.frame("parameter" = colnames(coef_limma_fit),
+                    "coefficient_limma" = as.numeric(coef_limma_fit)),
+      by = "parameter")
+
+fig <- plot_ly(summary_coef_fit, x = ~coefficient_msqrob,
+               y = ~coefficient_msqrobLm_fix,
+               z = ~coefficient_limma,
+               type = 'scatter3d',
+               mode = 'markers+lines',
+               marker = list(size = 5), line = list(width = 2),
+               width = 1000, height = 400)
+
+fig <- fig %>%
+  layout(scene = list(xaxis = list(title = 'msqrob2'),
+                      yaxis = list(title = 'msqrob2 fix'),
+                      zaxis = list(title = 'limma')))
 ```
 ]]
 
 .panel[
-.panel-name[Comments]
-
+.panel-name[Coefficients results Plot]
+```{r coef_fit_plot, echo=FALSE}
+fig
+```
 ]]
 
 ---
@@ -362,19 +416,25 @@ coef_limma_fit <- limma_fit$coefficients
 
 .panelset[
 .panel[
-.panel-name[Success results]
+.panel-name[Success Results Comments]
+.bigger1[
+
+]
+]
+.panel[
+.panel-name[Success Results Code]
 .scrollable[
 ```{r results_nfit_msqrob}
 
 result_scp_nfit_msqrob <- scp::scpModelFilterNPRatio(scp_nfit_msqrob, filtered = FALSE)
-result_msqrobLm_nfit_msqrob <- msqrobLm_nfit_msqrob[[1]]@type
+result_msqrob_nfit_msqrob <- msqrob_nfit_msqrob@type
 result_msqrobLm_fix_nfit_msqrob <- msqrobLm_fix_nfit_msqrob[[1]]@type
 result_limma_nfit_msqrob <- sum(!is.na(limma_nfit_msqrob$coefficients))
 
 print(paste("The scplainer model return a NP ratio that is equal to",
             result_scp_nfit_msqrob))
 print(paste("The msqrobLm model return a",
-            result_msqrobLm_nfit_msqrob,
+            result_msqrob_nfit_msqrob,
             "model."))
 print(paste("The msqrobLm model with the fix return a"
             , result_msqrobLm_fix_nfit_msqrob,
@@ -384,31 +444,134 @@ print(paste("The limma model return",
             "coefficients."))
 ```
 ]]
+]
+
+---
+
+# Results non fitted with msqrob2
+
+.panelset[
 .panel[
-.panel-name[Coefficients results]
+.panel-name[Coefficients Results Comments]
+
+- Test
+]
+.panel[
+.panel-name[Coefficients Results Code]
 .scrollable[
 
 ```{r coef_nfit_msqrob}
-coef_scp_nfit_msqrob <- scp:::scpModelCoefficients(scp_nfit_msqrob)[[1]]
-coef_msqrobLm_nfit_msqrob <- getCoef(msqrobLm_nfit_msqrob[[1]])
+# sum_to_dummy <- function(x){
+#     # x: numeric vector of coefficients
+#     gamma <- x[-1]
+#     beta <- gamma - sum(gamma)/length(x)
+#     beta <- c(0, beta)
+#     names(beta) <- names(x)
+#     return(beta)
+# }
+# # Convert sum coding to dummy coding for scplainer
+# model_scp_nfit_msqrob <- scp:::scpModelFitList(scp_nfit_msqrob)[[1]]
+# beta <- sum_to_dummy(model_scp_nfit_msqrob@coefficients)
+
+coef_msqrob_nfit_msqrob <- getCoef(msqrob_nfit_msqrob) # NA
 coef_msqrobLm_fix_nfit_msqrob <- getCoef(msqrobLm_fix_nfit_msqrob[[1]])
 coef_limma_nfit_msqrob <- limma_nfit_msqrob$coefficients
+
 
 summary_coef_nfit_msqrob <- full_join(data.frame("parameter" = names(coef_msqrobLm_fix_nfit_msqrob),
                     "coefficient_msqrobLm_fix" = coef_msqrobLm_fix_nfit_msqrob),
       data.frame("parameter" = colnames(coef_limma_nfit_msqrob),
                     "coefficient_limma" = as.numeric(coef_limma_nfit_msqrob)), by = "parameter")
-plot(x = summary_coef_nfit_msqrob$coefficient_msqrobLm_fix, y = summary_coef_nfit_msqrob$coefficient_limma)
-summary_coef_nfit_msqrob <- pivot_longer(summary_coef_nfit_msqrob,
-                                         cols = c("coefficient_msqrobLm_fix", "coefficient_limma"),
-                                         names_to = "model",
-                                         values_to = "coefficient")
 
-
+fig <- ggplot(summary_coef_nfit_msqrob, aes(x = coefficient_msqrobLm_fix, y = coefficient_limma)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  labs(x = "msqrob2 fix", y = "limma")
 ```
 ]]
 
 .panel[
+.panel-name[Coefficients Results Plot]
+.scrollable[
+```{r coef_nfit_msqrob_plot, echo=FALSE, warning=FALSE}
+fig
+```
+]
+]]
+
+---
+
+# Comparaison on a set of peptides
+
+.panelset[
+.panel[
 .panel-name[Comments]
 
+]
+.panel[
+.panel-name[Code]
+.scrollable[
+```{r subset_peptides}
+
+# create a subset of peptides using 2000 peptides
+num_features <- 2000  # Number of features to sample
+total_features <- nrow(sce)
+
+subset <- sce[sample(1:total_features, num_features),]
+```
+
+```{r subset_modelling, results = 'hide', warning=FALSE}
+
+subset_msqrob <- msqrob2::msqrob(subset,
+                                ~ 1 + Channel + Set + Mock,
+                                robust = FALSE,
+                                ridge = FALSE)
+subset_msqrobLm_fix <- msqrob2_fix(assay(subset),
+                                  ~ 1 + Channel + Set + Mock,
+                                  colData(subset),
+                                  robust = FALSE)
+subset_limma <- limma::lmFit(assay(subset),
+                            model.matrix(~ 1 + Channel + Set + Mock,
+                                         colData(subset)))
+subset_scp <- scp::scpModelWorkflow(subset,
+                                   formula = ~ 1 + Channel + Set + Mock)
+```
+
+``` {r contrasts, results = 'hide', warning=FALSE}
+design <- model.matrix(~ 1 + Channel + Set + Mock, colData(subset))
+
+L_limma <- makeContrasts(Mock2, levels = design)
+contrast_limma <- contrasts.fit(subset_limma, L_limma)
+contrast_limma <- eBayes(contrast_limma)
+contrast_limma <- topTable(contrast_limma, sort.by = "p", number = 2000)
+
+L_msqrob <- makeContrast(c("Mock2 = 0"), parameterNames = colnames(design))
+contrast_msqrob <- hypothesisTest(subset_msqrob, contrast = L_msqrob)
+contrast_msqrob <- rowData(contrast_msqrob)$Mock2
+
+contrast_scp <- scp::scpDifferentialAnalysis(subset_scp, contrasts = list(c("Mock", "2", "1")))
+contrast_scp <- contrast_scp[[1]] %>% 
+  as.data.frame()
+rownames(contrast_scp) <- contrast_scp$feature
+```
+
 ]]
+.panel[
+.panel-name[Contrasts Tables]
+.scrollable[
+``` {r contrasts_dfs}
+common_rows <- Reduce(intersect,
+                      list(rownames(contrast_msqrob),
+                           rownames(contrast_limma),
+                           rownames(contrast_scp)))
+DT::datatable(contrast_msqrob[common_rows,])
+DT::datatable(contrast_limma[common_rows,])
+DT::datatable(contrast_scp[common_rows,])
+
+```
+]
+]]
+
+---
+
+# Comparaison on a set of peptides
