@@ -39,6 +39,7 @@ library(BiocParallel)
 library(tidyverse)
 library(plotly)
 library(DT)
+library(lme4)
 
 ```
 
@@ -65,6 +66,8 @@ library(DT)
 sce <- readRDS("data/leduc_mock.rds")
 set.seed(1234)
 sce$Mock <- .createMockBalanced(2, sce$Set)
+
+colData(sce) <- droplevels(colData(sce))
 
 ```
 ]
@@ -132,7 +135,7 @@ msqrob2::msqrob that use msqrobLm under the hood to fit the models.
 .scrollable[
 ```{r msqrobLm_modif}
 
-msqrob2_fix <- function (y, formula, data, robust = TRUE, maxitRob = 5) 
+msqrobLm_fix <- function (y, formula, data, robust = TRUE, maxitRob = 5) 
 {
     myDesign <- model.matrix(formula, data)
     models <- apply(y, 1, function(y, design) {
@@ -202,6 +205,54 @@ msqrob2_fix <- function (y, formula, data, robust = TRUE, maxitRob = 5)
     return(models)
 }
 
+
+### msqrob2::msqrob with the new msqrobLm
+
+msqrob_fix <-  .local <- function (object, formula, modelColumnName = "msqrobModels", 
+        overwrite = FALSE, robust = TRUE, ridge = FALSE, maxitRob = 1, 
+        tol = 1e-06, doQR = TRUE, lmerArgs = list(control = lmerControl(calc.derivs = FALSE))) 
+    {
+        if (ncol(colData(object)) == 0) 
+            stop("colData is empty")
+        if ((modelColumnName %in% colnames(rowData(object))) & 
+            !overwrite) {
+            stop("There is already a column named '", modelColumnName, 
+                "' in the rowData of the SummarizedExperiment object, set the argument overwrite=TRUE to replace the column with the new results or use another name for the argument modelColumnName to store the results as a novel column in the rowData of SummarizedExperiment object")
+        }
+        if (length(formula) == 3) {
+            formula <- formula[-2]
+        }
+        if (any(all.vars(formula) %in% colnames(rowData(object)))) {
+            stop("Use the msqrobAggregate function to use rowData variables")
+        }
+        check_vars <- all.vars(formula) %in% colnames(colData(object))
+        if (!all(check_vars)) {
+            if (sum(!check_vars) > 1) {
+                vars_not_found <- paste0(all.vars(formula)[!check_vars], 
+                    collapse = ", ")
+                stop(paste("Variables", vars_not_found, "are not found in coldata"), 
+                    sep = "")
+            }
+            else {
+                vars_not_found <- all.vars(formula)[!check_vars]
+                stop(paste0("Variable ", vars_not_found, " is not found in coldata"), 
+                    sep = "")
+            }
+        }
+        if (!ridge & is.null(findbars(formula))) {
+            rowData(object)[[modelColumnName]] <- msqrobLm_fix(y = assay(object), 
+                formula = formula, data = droplevels(colData(object)), 
+                robust = robust, maxitRob = maxitRob)
+        }
+        else {
+            rowData(object)[[modelColumnName]] <- msqrobLmer(y = assay(object), 
+                formula = formula, data = droplevels(colData(object)), 
+                rowdata = NULL, robust = robust, maxitRob = maxitRob, 
+                tol = tol, doQR = doQR, ridge = ridge, lmerArgs = lmerArgs)
+        }
+        rowData(object)[[modelColumnName]] <- rowData(object)[[modelColumnName]][rownames(rowData(object))]
+        return(object)
+    }
 ```
 
 ]
@@ -220,11 +271,11 @@ class:
 ```{r modelling_nfit, results = 'hide', warning=FALSE}
 scp_nfit <- scp::scpModelWorkflow(non_fitted,
                              formula = ~ 1 + Channel + Set + Mock)
-msqrob_nfit <- rowData(msqrob2::msqrob(non_fitted,
-                                   ~ 1 + Channel + Set + Mock,
-                                   robust = FALSE,
-                                   ridge = FALSE))$msqrobModels[[1]]
-msqrobLm_fix_nfit <- msqrob2_fix(assay(non_fitted),
+msqrobLm_nfit <- msqrobLm(assay(non_fitted),
+                           ~ 1 + Channel + Set + Mock,
+                           colData(non_fitted),
+                           robust = FALSE)
+msqrobLm_fix_nfit <- msqrobLm_fix(assay(non_fitted),
                            ~ 1 + Channel + Set + Mock,
                            colData(non_fitted),
                            robust = FALSE)
@@ -241,11 +292,11 @@ limma_nfit <- limma::lmFit(y, design)
 ```{r modelling_fit, results = 'hide', warning=FALSE}
 scp_fit <- scp::scpModelWorkflow(fitted,
                             formula = ~ 1 + Channel + Set + Mock)
-msqrob_fit <- rowData(msqrob2::msqrob(fitted,
-                                   ~ 1 + Channel + Set + Mock,
-                                   robust = FALSE,
-                                   ridge = FALSE))$msqrobModels[[1]]
-msqrobLm_fix_fit <- msqrob2_fix(assay(fitted),
+msqrobLm_fit <- msqrobLm(assay(fitted),
+                            ~ 1 + Channel + Set + Mock,
+                            colData(fitted),
+                            robust = FALSE)
+msqrobLm_fix_fit <- msqrobLm_fix(assay(fitted),
                             ~ 1 + Channel + Set + Mock,
                             colData(fitted),
                             robust = FALSE)
@@ -262,11 +313,11 @@ limma_fit <- limma::lmFit(y, design)
 ```{r modelling_fit_msqrob, results = 'hide', warning=FALSE}
 scp_nfit_msqrob <- scp::scpModelWorkflow(non_fitted_msqrob,
                                           formula = ~ 1 + Channel + Set + Mock)
-msqrob_nfit_msqrob <- rowData(msqrob2::msqrob(non_fitted_msqrob,
-                                   ~ 1 + Channel + Set + Mock,
-                                   robust = FALSE,
-                                   ridge = FALSE))$msqrobModels[[1]]
-msqrobLm_fix_nfit_msqrob <- msqrob2_fix(assay(non_fitted_msqrob),
+msqrobLm_nfit_msqrob <- msqrobLm(assay(non_fitted_msqrob),
+                                        ~ 1 + Channel + Set + Mock,
+                                        colData(non_fitted_msqrob),
+                                        robust = FALSE)
+msqrobLm_fix_nfit_msqrob <- msqrobLm_fix(assay(non_fitted_msqrob),
                                         ~ 1 + Channel + Set + Mock,
                                         colData(non_fitted_msqrob),
                                         robust = FALSE)
@@ -307,7 +358,7 @@ multiple test correction.
 ```{r results_nfit}
 
 result_scp_nfit <- scpModelFilterNPRatio(scp_nfit, filtered = FALSE)
-result_msqrob_nfit <- msqrob_nfit@type
+result_msqrobLm_nfit <- msqrobLm_nfit[[1]]@type
 result_msqrobLm_fix_nfit <- msqrobLm_fix_nfit[[1]]@type
 result_limma_nfit <- sum(!is.na(limma_nfit$coefficients))
 
@@ -315,7 +366,7 @@ print(paste("The scplainer model return a NP ratio that is equal to",
             result_scp_nfit))
 print("Some coefficients are still estimated due to theuse of a ridge regression.")
 print(paste("The msqrob model return a",
-            result_msqrob_nfit,
+            result_msqrobLm_nfit,
             "model."))
 print(paste("The msqrob model with the fix return a"
             , result_msqrobLm_fix_nfit,
@@ -346,14 +397,14 @@ a model.
 ```{r results_fit}
 
 result_scp_fit <- scp::scpModelFilterNPRatio(scp_fit, filtered = FALSE)
-result_msqrob_fit <- msqrob_fit@type
+result_msqrobLm_fit <- msqrobLm_fit[[1]]@type
 result_msqrobLm_fix_fit <- msqrobLm_fix_fit[[1]]@type
 result_limma_fit <- sum(!is.na(limma_fit$coefficients))
 
 print(paste("The scplainer model return a NP ratio that is equal to",
             result_scp_fit))
 print(paste("The msqrob model return a",
-            result_msqrob_fit,
+            result_msqrobLm_fit,
             "model."))
 print(paste("The msqrob model with the fix return a"
             , result_msqrobLm_fix_fit,
@@ -373,14 +424,14 @@ print(paste("The limma model return",
 .scrollable[
 
 ```{r coef_fit}
-coef_msqrob_fit <- getCoef(msqrob_fit)
+coef_msqrobLm_fit <- getCoef(msqrobLm_fit[[1]])
 coef_msqrobLm_fix_fit <- getCoef(msqrobLm_fix_fit[[1]])
 coef_limma_fit <- limma_fit$coefficients
 
 
 summary_coef_fit <- full_join(full_join(
-      data.frame("parameter" = names(coef_msqrob_fit),
-                    "coefficient_msqrob" = coef_msqrob_fit),
+      data.frame("parameter" = names(coef_msqrobLm_fit),
+                    "coefficient_msqrobLm" = coef_msqrobLm_fit),
       data.frame("parameter" = names(coef_msqrobLm_fix_fit),
                     "coefficient_msqrobLm_fix" = coef_msqrobLm_fix_fit),
       by = "parameter"),
@@ -388,7 +439,7 @@ summary_coef_fit <- full_join(full_join(
                     "coefficient_limma" = as.numeric(coef_limma_fit)),
       by = "parameter")
 
-fig <- plot_ly(summary_coef_fit, x = ~coefficient_msqrob,
+fig <- plot_ly(summary_coef_fit, x = ~coefficient_msqrobLm,
                y = ~coefficient_msqrobLm_fix,
                z = ~coefficient_limma,
                type = 'scatter3d',
@@ -427,14 +478,14 @@ fig
 ```{r results_nfit_msqrob}
 
 result_scp_nfit_msqrob <- scp::scpModelFilterNPRatio(scp_nfit_msqrob, filtered = FALSE)
-result_msqrob_nfit_msqrob <- msqrob_nfit_msqrob@type
+result_msqrobLm_nfit_msqrob <- msqrobLm_nfit_msqrob[[1]]@type
 result_msqrobLm_fix_nfit_msqrob <- msqrobLm_fix_nfit_msqrob[[1]]@type
 result_limma_nfit_msqrob <- sum(!is.na(limma_nfit_msqrob$coefficients))
 
 print(paste("The scplainer model return a NP ratio that is equal to",
             result_scp_nfit_msqrob))
 print(paste("The msqrobLm model return a",
-            result_msqrob_nfit_msqrob,
+            result_msqrobLm_nfit_msqrob,
             "model."))
 print(paste("The msqrobLm model with the fix return a"
             , result_msqrobLm_fix_nfit_msqrob,
@@ -473,7 +524,7 @@ print(paste("The limma model return",
 # model_scp_nfit_msqrob <- scp:::scpModelFitList(scp_nfit_msqrob)[[1]]
 # beta <- sum_to_dummy(model_scp_nfit_msqrob@coefficients)
 
-coef_msqrob_nfit_msqrob <- getCoef(msqrob_nfit_msqrob) # NA
+coef_msqrobLm_nfit_msqrob <- getCoef(msqrobLm_nfit_msqrob[[1]])
 coef_msqrobLm_fix_nfit_msqrob <- getCoef(msqrobLm_fix_nfit_msqrob[[1]])
 coef_limma_nfit_msqrob <- limma_nfit_msqrob$coefficients
 
@@ -518,18 +569,19 @@ num_features <- 2000  # Number of features to sample
 total_features <- nrow(sce)
 
 subset <- sce[sample(1:total_features, num_features),]
+colData(subset) <- droplevels(colData(subset))
 ```
 
 ```{r subset_modelling, results = 'hide', warning=FALSE}
 
-subset_msqrob <- msqrob2::msqrob(subset,
-                                ~ 1 + Channel + Set + Mock,
-                                robust = FALSE,
-                                ridge = FALSE)
-subset_msqrobLm_fix <- msqrob2_fix(assay(subset),
-                                  ~ 1 + Channel + Set + Mock,
-                                  colData(subset),
-                                  robust = FALSE)
+subset_msqrob <-  msqrob(subset,
+                           formula = ~ 1 + Channel + Set + Mock,
+                           robust = FALSE,
+                           ridge = FALSE)
+subset_msqrob_fix <- msqrob_fix(subset,
+                           formula = ~ 1 + Channel + Set + Mock,
+                           robust = FALSE,
+                           ridge = FALSE)
 subset_limma <- limma::lmFit(assay(subset),
                             model.matrix(~ 1 + Channel + Set + Mock,
                                          colData(subset)))
@@ -549,6 +601,9 @@ L_msqrob <- makeContrast(c("Mock2 = 0"), parameterNames = colnames(design))
 contrast_msqrob <- hypothesisTest(subset_msqrob, contrast = L_msqrob)
 contrast_msqrob <- rowData(contrast_msqrob)$Mock2
 
+contrast_msqrob_fix <- hypothesisTest(subset_msqrob_fix, contrast = L_msqrob)
+contrast_msqrob_fix <- rowData(contrast_msqrob_fix)$Mock2
+
 contrast_scp <- scp::scpDifferentialAnalysis(subset_scp, contrasts = list(c("Mock", "2", "1")))
 contrast_scp <- contrast_scp[[1]] %>% 
   as.data.frame()
@@ -563,8 +618,10 @@ rownames(contrast_scp) <- contrast_scp$feature
 common_rows <- Reduce(intersect,
                       list(rownames(contrast_msqrob),
                            rownames(contrast_limma),
-                           rownames(contrast_scp)))
+                           rownames(contrast_scp),
+                           rownames(contrast_msqrob_fix)))
 DT::datatable(contrast_msqrob[common_rows,])
+DT::datatable(contrast_msqrob_fix[common_rows,])
 DT::datatable(contrast_limma[common_rows,])
 DT::datatable(contrast_scp[common_rows,])
 
