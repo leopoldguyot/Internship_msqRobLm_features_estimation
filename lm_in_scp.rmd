@@ -18,8 +18,6 @@ output:
 
 ---
 
-class:
-
 ```{r xaringanExtra, echo=FALSE}
 xaringanExtra::use_tile_view()  ## use o to get an overview
 xaringanExtra::use_fit_screen() ## use Alt-F to fit to screen
@@ -40,78 +38,101 @@ library(tidyverse)
 library(plotly)
 library(DT)
 library(lme4)
+library(UpSetR)
 
 ```
 
+# Outlines
 
-# Data loading
-
-.panelset[
-.panel[
-.panel-name[Code]
-
-```{r data_loading}
-
-.createMockBalanced <- function(k, runs) {
-    out <- split(runs, runs)
-    out <- lapply(out, function(x) {
-        index <- 1:length(x)
-        x[sample(index)] <- rep(1:k, length.out = length(index))
-        x
-    })
-    out <- S4Vectors::unname(do.call(c, out))
-    as.factor(out)
-}
-
-sce <- readRDS("data/leduc_mock.rds")
-set.seed(1234)
-sce$Mock <- .createMockBalanced(2, sce$Set)
-
-colData(sce) <- droplevels(colData(sce))
-
-```
-]
-
-.panel[
-.panel-name[Preview]
-
-```{r sce_preview}
-sce
-```
-]
-]
-
-
----
-class:middle
-
-# Subset of specific peptides
-.scrollable[
-### Non fitted
-Model for a peptide that is not fitted neither for scplainer and msqrob2
-
-```{r nfit}
-non_fitted <- sce["AAATAEEPDPK_2",]
-```
-### Fitted with each method
-Model for a paetide that is fitted for each method
-
-```{r fit}
-fitted <- sce["GAEAANVTGPGGVPVQGSK_3",]
-```
-
-### Non fitted with msqrob2
-Model for a peptide that is not fitted only for msqrob2
-
-```{r nfit_msqrob}
-non_fitted_msqrob <- sce["EATTEFSVDAR_2",]
-```
+.bigger1-5[
+1. Theoretical Introduction
+2. Presentation of the different methods
+3. Application on specific peptides
+4. Application on a global analysis
+5. Benchmark of the methods
 ]
 
 ---
-class: 
 
-# Modified version of msqrobLm
+# Theoretical Introduction
+
+### Matrix Computation Least Square
+### QR Decomposition
+### Pivoting and rank
+
+---
+# Matrix Computation Least Square
+
+.bigger1-3[
+- In the least square method, we want to minimize the sum of the square of the residuals.
+- The model can be represented in matrix form as $y = X\beta + \epsilon$.
+- And the solution of the least square is $\hat{\beta} = (X^TX)^{-1}X^Ty$.
+
+- Drawbacks:
+  - The solution is not always possible, especially when the matrix $X^TX$ is singular.
+  - This model can be computationally expensive.
+]
+
+---
+# QR Decomposition
+
+.bigger1-3[
+
+- QR decomposition: Factorizes a matrix X into an orthogonal matrix Q and an upper triangular matrix R.
+- This decomposition can be used in the classical linear equation.
+- We obtain $R\beta = Q^Ty$, which can be solved for β using back-substitution.
+
+- Advantages:
+  - More numerically stable compared to directly solving normal equations. (avoid problem with matrix inversion)
+  - There are efficient algorithms to solve this equation.
+]
+---
+# Pivoting and Rank Deficiency
+
+### Pivoting
+
+.bigger1-3[
+- Pivoting is the process of reordering the rows of a matrix to improve the numerical stability of the matrix factorization.
+]
+
+### Rank Deficiency
+
+.bigger1-3[
+- A matrix is rank deficient if it does not have full rank, which means that some columns are linearly dependent.
+
+=> The full rank can be restored by dropping some columns of the matrix.
+]
+---
+
+# Presentation of the different methods
+
+### scplainer
+### limma
+### msqrob2
+
+---
+
+# scplainer
+
+.bigger1-3[
+]
+
+---
+# limma
+
+.bigger1-3[
+]
+
+---
+
+# msqrob2
+
+.bigger1-3[
+]
+
+---
+
+# Modified version of msqrob
 .panelset[
 .panel[
 .panel-name[Comments]
@@ -260,6 +281,81 @@ msqrob_fix <-  .local <- function (object, formula, modelColumnName = "msqrobMod
 ]
 
 ---
+class: center, middle
+
+# Application on specific peptides
+
+---
+
+# Data loading
+
+.panelset[
+.panel[
+.panel-name[Code]
+
+```{r data_loading}
+
+.createMockBalanced <- function(k, runs) {
+    out <- split(runs, runs)
+    out <- lapply(out, function(x) {
+        index <- 1:length(x)
+        x[sample(index)] <- rep(1:k, length.out = length(index))
+        x
+    })
+    out <- S4Vectors::unname(do.call(c, out))
+    as.factor(out)
+}
+
+sce <- readRDS("data/leduc_mock.rds")
+set.seed(1234)
+sce$Mock <- .createMockBalanced(2, sce$Set)
+
+colData(sce) <- droplevels(colData(sce))
+
+```
+]
+
+.panel[
+.panel-name[Preview]
+
+```{r sce_preview}
+sce
+```
+]
+]
+
+
+---
+class:middle
+
+# Subset of specific peptides
+.scrollable[
+### Non fitted
+Model for a peptide that is not fitted neither for scplainer and msqrob2
+
+```{r nfit}
+non_fitted <- sce["AAATAEEPDPK_2",]
+print(paste("Number of observed values: ", sum(is.finite(assay(non_fitted)[1,]))))
+```
+### Fitted with each method
+Model for a paetide that is fitted for each method
+
+```{r fit}
+fitted <- sce["GAEAANVTGPGGVPVQGSK_3",]
+print(paste("Number of observed values: ", sum(is.finite(assay(fitted)[1,]))))
+```
+
+### Non fitted with msqrob2
+Model for a peptide that is not fitted only for msqrob2
+
+```{r nfit_msqrob}
+non_fitted_msqrob <- sce["EATTEFSVDAR_2",]
+print(paste("Number of observed values: ", sum(is.finite(assay(non_fitted_msqrob)[1,]))))
+```
+]
+
+---
+
 class:
 
 # Modelling
@@ -612,6 +708,38 @@ rownames(contrast_scp) <- contrast_scp$feature
 
 ]]
 .panel[
+.panel-name[Contrasts Sets]
+.scrollable[
+
+``` {r contrasts_sets, fig.width=10, fig.height=8}
+set_limma <- contrast_limma %>% 
+  filter(P.Value < 0.05) %>%
+  rownames()
+
+set_msqrob <- contrast_msqrob %>%
+  filter(pval < 0.05) %>% 
+  rownames()
+
+set_msqrob_fix <- contrast_msqrob_fix %>%
+  filter(pval < 0.05) %>%
+  rownames()
+
+set_scplainer <- contrast_scp %>%
+  filter(pvalue < 0.05) %>% 
+  rownames()
+
+sets <- list(
+  limma = set_limma,
+  msqrob = set_msqrob,
+  msqrob_fix = set_msqrob_fix,
+  scplainer = set_scplainer
+)
+upset(fromList(sets), order.by = "freq")
+
+```
+
+]]
+.panel[
 .panel-name[Contrasts Tables]
 .scrollable[
 ``` {r contrasts_dfs}
@@ -633,12 +761,15 @@ DT::datatable(contrast_scp[common_rows,])
 
 # Benchmark of the methods
 
+.scrollable[
+
 ```{r benchmark}
 bench_res <- read.csv("data_output/benchmark_results.csv")
+bench_res$secondes<- bench_res$time/(1e9)
 
-ggplotly(ggplot(bench_res, aes(x = featureNumber, y = time*10e-9, color = Method)) +
-           geom_line()+
-           ggtitle("Benchmark of the different methods")
+ggplotly(ggplot(bench_res, aes(x = featureNumber, y = secondes, color = Method)) +
+           geom_boxplot(),
+         width = 800, height = 400
          )
-
 ```
+]
