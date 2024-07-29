@@ -631,4 +631,14 @@ DT::datatable(contrast_scp[common_rows,])
 
 ---
 
-# Comparaison on a set of peptides
+# Benchmark of the methods
+
+```{r benchmark}
+bench_res <- read.csv("data_output/benchmark_results.csv")
+
+ggplotly(ggplot(bench_res, aes(x = featureNumber, y = time*10e-9, color = Method)) +
+           geom_line()+
+           ggtitle("Benchmark of the different methods")
+         )
+
+```
