@@ -4,6 +4,7 @@ library(scp)
 library(msqrob2)
 library(limma)
 library(microbenchmark)
+library(dplyr)
 
 #### Functions
 
@@ -129,9 +130,11 @@ colData(sce5000) <- droplevels(colData(sce5000))
 sce10000 <- sce[sample(1:nrow(sce), 10000),]
 colData(sce10000) <- droplevels(colData(sce10000))
 sce18000 <- sce[sample(1:nrow(sce), 18000),]
-colData(sc18000) <- droplevels(colData(sce18000))
+colData(sce18000) <- droplevels(colData(sce18000))
 
 ### Benchmarking
+time <- Sys.time()
+
 bench_res <- microbenchmark(msqrobLm_wrapper(sce2000),
                             msqrobLm_fix_wrapper(sce2000),
                             limma_wrapper(sce2000),
@@ -154,5 +157,5 @@ bench_res <- bench_res %>%
     mutate(Method = sub("_wrapper.*", "", expr),
            featureNumber = as.numeric(sub(".*sce([0-9]+).*", "\\1", expr)))
 
-
-write.csv(as.data.frame(bench_res), file = "data_output/benchmark_results.csv")
+print(time - Sys.time())
+write.csv(bench_res, file = "data_output/benchmark_results.csv")
