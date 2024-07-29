@@ -1,0 +1,13 @@
+"","expr","time"
+"1","scplainer_wrapper(sce)",1215182403794
+"2","msqrobLm_fix_wrapper(sce)",66735953334
+"3","msqrobLm_wrapper(sce)",30799236415
+"4","msqrobLm_fix_wrapper(sce)",66961463721
+"5","msqrobLm_wrapper(sce)",30673938595
+"6","limma_wrapper(sce)",38344246988
+"7","limma_wrapper(sce)",38324743755
+"8","msqrobLm_fix_wrapper(sce)",67526511008
+"9","scplainer_wrapper(sce)",1215485824723
+"10","msqrobLm_wrapper(sce)",30817943072
+"11","scplainer_wrapper(sce)",1213899640790
+"12","limma_wrapper(sce)",38963384026
