@@ -115,19 +115,61 @@ library(UpSetR)
 # scplainer
 
 .bigger1-3[
+- Based on ridge linear regression
+
+- Regression obtained using basic matrix algebra
+
+- Missing values are subsetted out before proceeding the regression.
+
+- This subset ensure that the model is not rank defficient​
 ]
 
 ---
 # limma
 
+.panelset[
+.panel[
+.panel-name[lmFit]
 .bigger1-3[
+- Based on basic least square linear regression
+
+- Function notEstimable report the different coefficient that are not estimable (linearly dependent parameters). This is done via qr(). Note that this is made before the subsetting therefore only some of the coefficients will be considered not estimable while in reality there are more coefficients not estimable after the subsetting​
+
+
+- Use lm.fit to carry out the regression
+
+- Does not check for rank defficienty in the model, just return the estimatable coefficients​
+
 ]
+]
+.panel[
+.panel-name[contrasts.fit]
+.bigger1-3[
+- contrasts.fit is used to estimate coefficients for contrasts.
+
+- This function ensure that the contrast involve only estimable contrast (via the use of the pivot object of the fit (estimated pivot[1:nrow(contrasts)])
+
+- During the operations NAs are replaced by coefficient value of zero and enormous variance. These values are retransformed at the end into NAs
+]
+]
+]
+
 
 ---
 
 # msqrob2
 
 .bigger1-3[
+
+- Based on basic least square linear regression
+
+- The regression is carried out by lm.fit which use qr decomposition​
+
+- A subset of the response vector and of the model matrix is made. Coefficients of the model matrix with no values are removed
+
+- Using a subsetting when the model matrix is already constructed makes unable to check the completeness of the groups burried in the interecept. Therefore when a reference group has no values, the model is rank defficient​
+
+- Within the algorithm there is a check to see if the model is rank defficient, if this is the case nothing is returned for the concerned feature => This is what cause the issue of low number of features fitted​
 ]
 
 ---
@@ -143,11 +185,12 @@ is rank deficient.
 that have no information (i.e. all zeros). But it does not handle the case
 where the reference group of a variable has no values, in this case the model
 become rank deficient.
+- A first solution would be to change the condition to let rank defficient model to be estimated. But for the robust case, msqrob use rlm from MASS which throw an error when the model is rank defficient.
 - To solve this issue, we changed the way the subset is performed by only
 keeping the x first columns of the design matrix, with columns sorted by their
 pivoting rank and x being the rank of the qr decomposition of the design matrix.
-- PS: msqrobLm is not able to fit models for all the peptides, so we will use
-msqrob2::msqrob that use msqrobLm under the hood to fit the models.
+
+- Note that we should maybe also implement a check for the completeness of the variable (check if each variable is represented by at least 2 groups)
 ]
 ]
 .panel[
@@ -338,7 +381,7 @@ non_fitted <- sce["AAATAEEPDPK_2",]
 print(paste("Number of observed values: ", sum(is.finite(assay(non_fitted)[1,]))))
 ```
 ### Fitted with each method
-Model for a paetide that is fitted for each method
+Model for a peptide that is fitted for each method
 
 ```{r fit}
 fitted <- sce["GAEAANVTGPGGVPVQGSK_3",]
@@ -433,18 +476,14 @@ limma_nfit_msqrob <- limma::lmFit(y, design)
 .panelset[
 .panel[
 .panel-name[Success Results Comments]
-.bigger1[
+.bigger1-3[
 - The scplainer model return a NP ratio that is less than 1, which means that 
 this model is not usable in the scplainer workflow. But some coefficients are
 still estimated due to the use of a ridge regression.
-- The msqrobLm model return a fitError model, which means that the model is not
+- Both msqrobLm and msqrobLm fixed models return a fitError model, which means that the models are not
 estimable
-- The msqrobLm model with the fix return a fitError model, which means that 
-the model is not estimable
 - The limma model return some coefficients, which means that the model still
-return a normal output even with poor data. This can cause a problem since these
-coefficients are not reliable, and will be taken into account in the
-multiple test correction.
+return a normal output even with poor data (only 26 observations on 818 samples). This can cause a problem since these coefficients are not reliable, and will be taken into account in the multiple test correction.
 ]
 ]
 
@@ -480,7 +519,7 @@ print(paste("The limma model return",
 .panelset[
 .panel[
 .panel-name[Success Results Comments]
-.bigger1-5[
+.bigger1-3[
 As intended, each method fitted a model for the peptide. scplainer return a 
 NP ration larger than 1 indicating that the model is usable in the scplainer
 workflow. And both the normal and fixed msqrob return a model. limma also return
@@ -515,6 +554,14 @@ print(paste("The limma model return",
 
 # Results fitted with each method
 .panelset[
+.panel[
+.panel-name[Coefficients Results Comments]
+.bigger1-3[
+- scplainer is not used in the coefficients comparison since during the model fitting, scplainer modify the reference group of the variable to avoid rank defficiency. This can cause a difference in the coefficients.
+
+- As we can see with the 3D plot, the coefficients returned by msqrobLm, msqrobLm fixed and limma are almost identical.
+]
+]
 .panel[
 .panel-name[Coefficients results Code]
 .scrollable[
@@ -564,8 +611,8 @@ fig
 .panelset[
 .panel[
 .panel-name[Success Results Comments]
-.bigger1[
-
+.bigger1-3[
+- As we can expect, only msqrobLm return a fitError object. This show us that the fix enable the estimation of some unestimable peptides.
 ]
 ]
 .panel[
@@ -601,25 +648,13 @@ print(paste("The limma model return",
 .panel[
 .panel-name[Coefficients Results Comments]
 
-- Test
+- We can see that when we compare the coefficients of the msqrobLm fix and limma, the coefficients are almost identical. This shows us that the estimation of the new msqrobLm is reliable.
 ]
 .panel[
 .panel-name[Coefficients Results Code]
 .scrollable[
 
 ```{r coef_nfit_msqrob}
-# sum_to_dummy <- function(x){
-#     # x: numeric vector of coefficients
-#     gamma <- x[-1]
-#     beta <- gamma - sum(gamma)/length(x)
-#     beta <- c(0, beta)
-#     names(beta) <- names(x)
-#     return(beta)
-# }
-# # Convert sum coding to dummy coding for scplainer
-# model_scp_nfit_msqrob <- scp:::scpModelFitList(scp_nfit_msqrob)[[1]]
-# beta <- sum_to_dummy(model_scp_nfit_msqrob@coefficients)
-
 coef_msqrobLm_nfit_msqrob <- getCoef(msqrobLm_nfit_msqrob[[1]])
 coef_msqrobLm_fix_nfit_msqrob <- getCoef(msqrobLm_fix_nfit_msqrob[[1]])
 coef_limma_nfit_msqrob <- limma_nfit_msqrob$coefficients
