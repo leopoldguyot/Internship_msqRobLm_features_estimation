@@ -121,7 +121,7 @@ library(UpSetR)
 
 - Missing values are subsetted out before proceeding the regression.
 
-- This subset ensure that the model is not rank defficient​
+- This subset ensure that the model is not rank deficient.
 ]
 
 ---
@@ -138,7 +138,7 @@ library(UpSetR)
 
 - Use lm.fit to carry out the regression
 
-- Does not check for rank defficienty in the model, just return the estimatable coefficients​
+- Does not check for rank deficiency in the model, just return the estimable coefficients.
 
 ]
 ]
@@ -163,13 +163,13 @@ library(UpSetR)
 
 - Based on basic least square linear regression
 
-- The regression is carried out by lm.fit which use qr decomposition​
+- The regression is carried out by lm.fit which use qr decomposition.
 
 - A subset of the response vector and of the model matrix is made. Coefficients of the model matrix with no values are removed
 
-- Using a subsetting when the model matrix is already constructed makes unable to check the completeness of the groups burried in the interecept. Therefore when a reference group has no values, the model is rank defficient​
+- Using a subsetting when the model matrix is already constructed makes unable to check the completeness of the groups burried in the intercept. Therefore when a reference group has no values, the model is rank deficient.
 
-- Within the algorithm there is a check to see if the model is rank defficient, if this is the case nothing is returned for the concerned feature => This is what cause the issue of low number of features fitted​
+- Within the algorithm there is a check to see if the model is rank deficient, if this is the case nothing is returned for the concerned feature => This is what cause the issue of low number of features fitted.
 ]
 
 ---
@@ -189,8 +189,6 @@ become rank deficient.
 - To solve this issue, we changed the way the subset is performed by only
 keeping the x first columns of the design matrix, with columns sorted by their
 pivoting rank and x being the rank of the qr decomposition of the design matrix.
-
-- Note that we should maybe also implement a check for the completeness of the variable (check if each variable is represented by at least 2 groups)
 ]
 ]
 .panel[
@@ -823,15 +821,26 @@ ggplotly(ggplot(bench_res, aes(x = featureNumber, y = secondes, color = Method))
 .panel-name[Only modelled features]
 .scrollable[
 ```{r benchmark_modelled}
-# bench_res <- read.csv("data_output/benchmark_results.csv")
-# bench_res$secondes<- bench_res$time/(1e9)
-# 
-# ggplotly(ggplot(bench_res, aes(x = featureNumber, y = secondes, color = Method)) +
-#            geom_boxplot(),
-#          width = 800, height = 400
-#          )
+bench_res_modelled <- read.csv("data_output/benchmark_results_modelled.csv")
+bench_res_modelled$secondes<- bench_res_modelled$time/(1e9)
+
+ggplotly(ggplot(bench_res_modelled, aes(x = Method, y = secondes, color = Method)) +
+           geom_boxplot(),
+         width = 800, height = 400
+         )
 ```
 
 ]
 ]
 ]
+
+---
+
+# Remarks
+
+.bigger1-3[
+- We should integrate a new check in the msqrob2 code to check that an interaction variable cannot disappear due to the subsetting. This would cause issue in the interpretabilty of the model.
+- I am currently working on the integration of lm.fit in scp to allow a faster model fitting. 
+- We also suggest that it would be interesting to have tools in msqrob2 to investigate how the model fitting went. (e.g. investigate the number and type of errors of the linear models)
+]
+
