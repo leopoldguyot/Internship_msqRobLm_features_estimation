@@ -477,12 +477,12 @@ limma_nfit_msqrob <- limma::lmFit(y, design)
 .panel[
 .panel-name[Success Results Comments]
 .bigger1-3[
-- The scplainer model return a NP ratio that is less than 1, which means that 
+- The scplainer model returns a NP ratio that is less than 1, which means that 
 this model is not usable in the scplainer workflow. But some coefficients are
 still estimated due to the use of a ridge regression.
 - Both msqrobLm and msqrobLm fixed models return a fitError model, which means that the models are not
 estimable
-- The limma model return some coefficients, which means that the model still
+- The limma model returns some coefficients, which means that the model still
 return a normal output even with poor data (only 26 observations on 818 samples). This can cause a problem since these coefficients are not reliable, and will be taken into account in the multiple test correction.
 ]
 ]
@@ -520,9 +520,9 @@ print(paste("The limma model return",
 .panel[
 .panel-name[Success Results Comments]
 .bigger1-3[
-As intended, each method fitted a model for the peptide. scplainer return a 
+As intended, each method fitted a model for the peptide. scplainer returns a 
 NP ration larger than 1 indicating that the model is usable in the scplainer
-workflow. And both the normal and fixed msqrob return a model. limma also return
+workflow. And both the normal and fixed msqrob return a model. limma also returns
 a model.
 ]
 ]
@@ -612,7 +612,7 @@ fig
 .panel[
 .panel-name[Success Results Comments]
 .bigger1-3[
-- As we can expect, only msqrobLm return a fitError object. This show us that the fix enable the estimation of some unestimable peptides.
+- As we can expect, only msqrobLm returns a fitError object. This show us that the fix enable the estimation of some unestimable peptides.
 ]
 ]
 .panel[
