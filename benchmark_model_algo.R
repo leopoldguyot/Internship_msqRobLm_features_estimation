@@ -157,5 +157,27 @@ bench_res <- bench_res %>%
     mutate(Method = sub("_wrapper.*", "", expr),
            featureNumber = as.numeric(sub(".*sce([0-9]+).*", "\\1", expr)))
 
-print(time - Sys.time())
 write.csv(bench_res, file = "data_output/benchmark_results.csv")
+
+
+# for only the estimable peptides
+colData(sce) <- droplevels(colData(sce))
+test <- msqrobLm_wrapper(sce)
+modelled <- unlist(lapply(test, function(x) x@type == "lm"))
+
+subset_modelled <- sce[modelled,]
+colData(subset_modelled) <- droplevels(colData(subset_modelled))
+
+bench_res_modelled <- microbenchmark(msqrobLm_wrapper(subset_modelled),
+                                     msqrobLm_fix_wrapper(subset_modelled),
+                                     limma_wrapper(subset_modelled),
+                                     scplainer_wrapper(subset_modelled),
+                                     times = 5)
+bench_res_modelled <- bench_res_modelled %>%
+    as.data.frame() %>%
+    mutate(Method = sub("_wrapper.*", "", expr),
+           featureNumber = as.numeric(sub(".*sce([0-9]+).*", "\\1", expr)))
+
+write.csv(bench_res_modelled, file = "data_output/benchmark_results_modelled.csv")
+
+print(time - Sys.time())

@@ -559,7 +559,7 @@ print(paste("The limma model return",
 .bigger1-3[
 - scplainer is not used in the coefficients comparison since during the model fitting, scplainer modify the reference group of the variable to avoid rank defficiency. This can cause a difference in the coefficients.
 
-- As we can see with the 3D plot, the coefficients returned by msqrobLm, msqrobLm fixed and limma are almost identical.
+- As we can see with the 3D plot, the coefficients returned by msqrobLm, msqrobLm fixed and limma are identical.
 ]
 ]
 .panel[
@@ -647,8 +647,9 @@ print(paste("The limma model return",
 .panelset[
 .panel[
 .panel-name[Coefficients Results Comments]
-
-- We can see that when we compare the coefficients of the msqrobLm fix and limma, the coefficients are almost identical. This shows us that the estimation of the new msqrobLm is reliable.
+.bigger1-3[
+- We can see that when we compare the coefficients of the msqrobLm fix and limma, the coefficients are identical. This shows us that the estimation of the new msqrobLm is reliable.
+]
 ]
 .panel[
 .panel-name[Coefficients Results Code]
@@ -676,7 +677,7 @@ fig <- ggplot(summary_coef_nfit_msqrob, aes(x = coefficient_msqrobLm_fix, y = co
 .panel-name[Coefficients Results Plot]
 .scrollable[
 ```{r coef_nfit_msqrob_plot, echo=FALSE, warning=FALSE}
-fig
+ggplotly(fig)
 ```
 ]
 ]]
@@ -688,8 +689,12 @@ fig
 .panelset[
 .panel[
 .panel-name[Comments]
-
+.bigger1-3[
+We can see that a large number of features are estimated by limma scplainer and the msqrob fix.
+While the msqrob model is not able to estimate the same number of features. We can also note that some features are only estimated by limma or by scplainer due to the difference in the model method.
 ]
+]
+
 .panel[
 .panel-name[Code]
 .scrollable[
@@ -747,20 +752,21 @@ rownames(contrast_scp) <- contrast_scp$feature
 .scrollable[
 
 ``` {r contrasts_sets, fig.width=10, fig.height=8}
+# change to use the number of estimated features
 set_limma <- contrast_limma %>% 
-  filter(P.Value < 0.05) %>%
+  filter(!is.na(logFC)) %>%
   rownames()
 
 set_msqrob <- contrast_msqrob %>%
-  filter(pval < 0.05) %>% 
+  filter(!is.na(logFC)) %>% 
   rownames()
 
 set_msqrob_fix <- contrast_msqrob_fix %>%
-  filter(pval < 0.05) %>%
+  filter(!is.na(logFC)) %>%
   rownames()
 
 set_scplainer <- contrast_scp %>%
-  filter(pvalue < 0.05) %>% 
+  filter(!is.na(Estimate)) %>% 
   rownames()
 
 sets <- list(
@@ -795,6 +801,10 @@ DT::datatable(contrast_scp[common_rows,])
 ---
 
 # Benchmark of the methods
+.panelset[
+.panel[
+.panel-name[Variable input size]
+
 
 .scrollable[
 
@@ -805,6 +815,23 @@ bench_res$secondes<- bench_res$time/(1e9)
 ggplotly(ggplot(bench_res, aes(x = featureNumber, y = secondes, color = Method)) +
            geom_boxplot(),
          width = 800, height = 400
-         )
+         ) # influence of the non estimation on msqrob
 ```
+]]
+
+.panel[
+.panel-name[Only modelled features]
+.scrollable[
+```{r benchmark_modelled}
+# bench_res <- read.csv("data_output/benchmark_results.csv")
+# bench_res$secondes<- bench_res$time/(1e9)
+# 
+# ggplotly(ggplot(bench_res, aes(x = featureNumber, y = secondes, color = Method)) +
+#            geom_boxplot(),
+#          width = 800, height = 400
+#          )
+```
+
+]
+]
 ]
