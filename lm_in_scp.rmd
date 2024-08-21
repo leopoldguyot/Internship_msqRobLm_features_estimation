@@ -3,7 +3,7 @@ title: "Linear regression in SCP"
 subtitle: "Resolving the issue of msqrob2"
 author: "Léopold Guyot"
 institute: "UGent"
-date: "24/07/2024"
+date: "20/08/2024"
 output:
   xaringan::moon_reader:
     css: styles.css
@@ -133,7 +133,7 @@ library(UpSetR)
 .bigger1-3[
 - Based on basic least square linear regression
 
-- Function notEstimable report the different coefficient that are not estimable (linearly dependent parameters). This is done via qr(). Note that this is made before the subsetting therefore only some of the coefficients will be considered not estimable while in reality there are more coefficients not estimable after the subsetting​
+- Function notEstimable report the different coefficient that are not estimable (linearly dependent parameters). This is done via qr(). Note that this is made before the subsetting therefore only some of the coefficients will be considered not estimable while in reality there are more coefficients not estimable after the subsetting.
 
 
 - Use lm.fit to carry out the regression
@@ -146,8 +146,6 @@ library(UpSetR)
 .panel-name[contrasts.fit]
 .bigger1-3[
 - contrasts.fit is used to estimate coefficients for contrasts.
-
-- This function ensure that the contrast involve only estimable contrast (via the use of the pivot object of the fit (estimated pivot[1:nrow(contrasts)])
 
 - During the operations NAs are replaced by coefficient value of zero and enormous variance. These values are retransformed at the end into NAs
 ]
@@ -460,6 +458,7 @@ msqrobLm_fix_nfit_msqrob <- msqrobLm_fix(assay(non_fitted_msqrob),
                                         robust = FALSE)
 y <- assay(non_fitted_msqrob)
 design <- model.matrix(~ 1 + Channel + Set + Mock, colData(non_fitted_msqrob))
+
 limma_nfit_msqrob <- limma::lmFit(y, design)
 ```
 
@@ -478,7 +477,7 @@ limma_nfit_msqrob <- limma::lmFit(y, design)
 - The scplainer model returns a NP ratio that is less than 1, which means that 
 this model is not usable in the scplainer workflow. But some coefficients are
 still estimated due to the use of a ridge regression.
-- Both msqrobLm and msqrobLm fixed models return a fitError model, which means that the models are not
+- Both msqrobLm and msqrobLm fixed models returns a fitError model, which means that the models are not
 estimable
 - The limma model returns some coefficients, which means that the model still
 return a normal output even with poor data (only 26 observations on 818 samples). This can cause a problem since these coefficients are not reliable, and will be taken into account in the multiple test correction.
@@ -495,16 +494,16 @@ result_msqrobLm_nfit <- msqrobLm_nfit[[1]]@type
 result_msqrobLm_fix_nfit <- msqrobLm_fix_nfit[[1]]@type
 result_limma_nfit <- sum(!is.na(limma_nfit$coefficients))
 
-print(paste("The scplainer model return a NP ratio that is equal to",
+print(paste("The scplainer model returns a NP ratio that is equal to",
             result_scp_nfit))
-print("Some coefficients are still estimated due to theuse of a ridge regression.")
-print(paste("The msqrob model return a",
+print("Some coefficients are still estimated due to the use of a ridge regression.")
+print(paste("The msqrob model returns a",
             result_msqrobLm_nfit,
             "model."))
-print(paste("The msqrob model with the fix return a"
+print(paste("The msqrob model with the fix returns a"
             , result_msqrobLm_fix_nfit,
             "model."))
-print(paste("The limma model return",
+print(paste("The limma model returns",
             result_limma_nfit,
             "coefficients."))
 ```
@@ -519,7 +518,7 @@ print(paste("The limma model return",
 .panel-name[Success Results Comments]
 .bigger1-3[
 As intended, each method fitted a model for the peptide. scplainer returns a 
-NP ration larger than 1 indicating that the model is usable in the scplainer
+NP ratio larger than 1 indicating that the model is usable in the scplainer
 workflow. And both the normal and fixed msqrob return a model. limma also returns
 a model.
 ]
@@ -534,15 +533,15 @@ result_msqrobLm_fit <- msqrobLm_fit[[1]]@type
 result_msqrobLm_fix_fit <- msqrobLm_fix_fit[[1]]@type
 result_limma_fit <- sum(!is.na(limma_fit$coefficients))
 
-print(paste("The scplainer model return a NP ratio that is equal to",
+print(paste("The scplainer model returns a NP ratio that is equal to",
             result_scp_fit))
-print(paste("The msqrob model return a",
+print(paste("The msqrob model returns a",
             result_msqrobLm_fit,
             "model."))
-print(paste("The msqrob model with the fix return a"
+print(paste("The msqrob model with the fix returns a"
             , result_msqrobLm_fix_fit,
             "model."))
-print(paste("The limma model return",
+print(paste("The limma model returns",
             result_limma_fit,
             "coefficients."))
 ```
@@ -623,15 +622,15 @@ result_msqrobLm_nfit_msqrob <- msqrobLm_nfit_msqrob[[1]]@type
 result_msqrobLm_fix_nfit_msqrob <- msqrobLm_fix_nfit_msqrob[[1]]@type
 result_limma_nfit_msqrob <- sum(!is.na(limma_nfit_msqrob$coefficients))
 
-print(paste("The scplainer model return a NP ratio that is equal to",
+print(paste("The scplainer model returns a NP ratio that is equal to",
             result_scp_nfit_msqrob))
-print(paste("The msqrobLm model return a",
+print(paste("The msqrobLm model returns a",
             result_msqrobLm_nfit_msqrob,
             "model."))
-print(paste("The msqrobLm model with the fix return a"
+print(paste("The msqrobLm model with the fix returns a"
             , result_msqrobLm_fix_nfit_msqrob,
             "model."))
-print(paste("The limma model return",
+print(paste("The limma model returns",
             result_limma_nfit_msqrob,
             "coefficients."))
 ```
