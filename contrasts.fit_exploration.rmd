@@ -5,6 +5,7 @@ date: "`r Sys.Date()`"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -255,5 +256,15 @@ identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "msqrob_fix"
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "contrast_msqrob_fix"])
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "contrast_limma"])
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "toptable_limma"])
+try(testthat::expect_identical(contrast_limma, subset_limma[,"SeteAL00220"]))
+
+dimnames(contrast_limma$coefficients)
+dimnames(subset_limma[,"SeteAL00220"]$coefficients)
+```
+
+```{r}
+test <- subset_limma$coefficients
+test <- test[,"SeteAL00220"]
+testthat::expect_identical(as.numeric(test), as.numeric(subset_limma[,"SeteAL00220"]$coefficients))
 ```
 
