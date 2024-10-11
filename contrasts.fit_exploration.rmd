@@ -18,6 +18,8 @@ library("msqrob2")
 library("limma")
 library("lme4")
 library("UpSetR")
+library("ggplot2")
+library("tidyverse")
 ```
 
 ```{r fix}
@@ -168,7 +170,7 @@ colData(subset) <- droplevels(colData(subset))
 
 ```{r models, message=FALSE}
 subset_msqrob <-  msqrob(subset,
-                           formula = ~ 1 + Set,
+                           formula = ~ 1 + Set + Mock,
                            robust = FALSE,
                            ridge = FALSE)
 subset_msqrob_fix <- msqrob_fix(subset,
@@ -192,7 +194,7 @@ toptable <- eBayes(contrast_limma)
 toptable <- topTable(toptable, sort.by = "none", number = 2000)
 
 L_msqrob <- makeContrast(c("SeteAL00220 = 0"), parameterNames = colnames(design))
-contrast_msqrob <- hypothesisTest(subset_msqrob, contrast = L_msqrob)
+contrast_msqrob <- hypothesisTest(subset_msqrob, contrast = L_msqrob, acceptDifferentReference = T)
 contrast_msqrob <- rowData(contrast_msqrob)$SeteAL00220
 
 contrast_msqrob_fix <- hypothesisTest(subset_msqrob_fix, contrast = L_msqrob)
@@ -256,15 +258,58 @@ identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "msqrob_fix"
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "contrast_msqrob_fix"])
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "contrast_limma"])
 identical(summary_df[to_test_fix, "limma"], summary_df[to_test_fix, "toptable_limma"])
-try(testthat::expect_identical(contrast_limma, subset_limma[,"SeteAL00220"]))
-
-dimnames(contrast_limma$coefficients)
-dimnames(subset_limma[,"SeteAL00220"]$coefficients)
 ```
 
 ```{r}
 test <- subset_limma$coefficients
 test <- test[,"SeteAL00220"]
 testthat::expect_identical(as.numeric(test), as.numeric(subset_limma[,"SeteAL00220"]$coefficients))
+```
+
+
+```{r}
+pe <- setdiff(to_test_fix, to_test_msqrob)[5]
+limma_coef_pe <- subset_limma$coefficients[pe,]
+
+df <- data.frame(y = assay(subset)[pe,], colData(subset)) %>% 
+    dplyr::filter(!is.na(y)) %>%
+    droplevels()
+ref_class <- levels(df$Set)[1]
+new_ref_class <- tail(levels(df$Set),1)
+test_class <- levels(df$Set)[2]
+
+df <- df %>% 
+    dplyr::filter(Set %in% c(ref_class, test_class, new_ref_class))
+ggplot(df,aes(x = Set, y = y))+geom_point()
+
+
+limma_coef_pe_test_class <- limma_coef_pe[paste0("Set", test_class)]
+df_mean <- df %>% 
+    group_by(Set) %>% 
+    summarise(mean = mean(y))
+df_mean$mean[2]-df_mean$mean[3] == limma_coef_pe_test_class
+```
+
+find how to discover that the reference dropped
+
+```{r}
+dropped <- setdiff(to_test_fix, to_test_msqrob)
+not_dropped <- to_test_msqrob
+dropped_matrix <- lapply(dropped, function(p){
+    subsubset <- subset[p,!is.na(assay(subset)[p,]), drop = FALSE]
+    model.matrix(~ -1 + Set, colData(subsubset))
+})
+
+res_dropped <- lapply(dropped_matrix, function(x) sum(x[,"SeteAL00219"]) == 0)
+
+not_dropped_matrix <- lapply(not_dropped, function(p){
+    subsubset <- subset[p,!is.na(assay(subset)[p,]), drop = FALSE]
+    model.matrix(~ -1 +Set, colData(subsubset))
+})
+
+res_not_dropped <- lapply(not_dropped_matrix, function(x) sum(x[,"SeteAL00219"]) == 0)
+
+summary(unlist(res_dropped))
+summary(unlist(res_not_dropped))
 ```
 

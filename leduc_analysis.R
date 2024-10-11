@@ -28,7 +28,7 @@ sce$Mock <- .createMockBalanced(2, sce$Set)
 
 BiocParallel::register(BiocParallel::MulticoreParam(4)) ## 4 workers
 sce <- msqrob(
-    sce, formula = ~ -1 + Channel + Set + Mock, ## only fixed effects
+    sce[1:10,], formula = ~ -1 + Set + Mock, ## only fixed effects
     ridge = FALSE, robust = FALSE
 )
 
